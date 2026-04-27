@@ -143,6 +143,7 @@ class CleanedQuery:
 
 @dataclass
 class EvidenceItem:
+    """Raw retrieved chunk surfaced for the agent's audit trail."""
     source_id: str
     source_type: str
     chunk_id: str
@@ -150,6 +151,8 @@ class EvidenceItem:
     url: str
     text: str
     score: float
+    rerank_score: float
+    section_title: str | None
     metadata: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
@@ -161,16 +164,22 @@ class EvidenceItem:
             "url": self.url,
             "text": self.text,
             "score": self.score,
+            "rerankScore": self.rerank_score,
+            "sectionTitle": self.section_title,
             "metadata": self.metadata,
         }
 
 
 @dataclass
-class Citation:
+class ContextItem:
+    """Compressed, agent-ready context derived from one chunk."""
     source_id: str
     chunk_id: str
     title: str
     url: str
+    section_title: str | None
+    text: str
+    score: float
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -178,40 +187,29 @@ class Citation:
             "chunkId": self.chunk_id,
             "title": self.title,
             "url": self.url,
-        }
-
-
-@dataclass
-class Usage:
-    estimated_tokens: int
-    max_tokens: int
-    returned_chunks: int
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "estimatedTokens": self.estimated_tokens,
-            "maxTokens": self.max_tokens,
-            "returnedChunks": self.returned_chunks,
+            "sectionTitle": self.section_title,
+            "text": self.text,
+            "score": self.score,
         }
 
 
 @dataclass
 class EvidencePackage:
-    query: str
+    original_query: str
     rewritten_query: str
+    context_for_agent: list[ContextItem]
     evidence: list[EvidenceItem]
-    citations: list[Citation]
-    usage: Usage
-    debug: dict[str, Any] | None = None
+    confidence: float
+    coverage_gaps: list[str]
+    retrieval_trace: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
-        out: dict[str, Any] = {
-            "query": self.query,
-            "rewrittenQuery": self.rewritten_query,
+        return {
+            "original_query": self.original_query,
+            "rewritten_query": self.rewritten_query,
+            "context_for_agent": [c.to_dict() for c in self.context_for_agent],
             "evidence": [e.to_dict() for e in self.evidence],
-            "citations": [c.to_dict() for c in self.citations],
-            "usage": self.usage.to_dict(),
+            "confidence": self.confidence,
+            "coverage_gaps": self.coverage_gaps,
+            "retrieval_trace": self.retrieval_trace,
         }
-        if self.debug is not None:
-            out["debug"] = self.debug
-        return out

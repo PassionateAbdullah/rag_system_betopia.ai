@@ -14,7 +14,7 @@ from rag.config import Config, load_config
 from rag.embeddings.base import EmbeddingProvider
 from rag.embeddings.default_provider import build_embedding_provider
 from rag.errors import IngestionError
-from rag.ingestion.chunker import chunk_text
+from rag.ingestion.chunker import chunk_with_sections
 from rag.ingestion.file_loader import detect_file_type, extract_text, is_supported
 from rag.types import Chunk, IngestionResult, IngestUploadInput
 from rag.vector.qdrant_client import QdrantStore
@@ -90,7 +90,7 @@ def ingest_uploaded_file(
 
     # --- stage: chunk ---
     try:
-        pieces = chunk_text(
+        section_chunks = chunk_with_sections(
             raw_text,
             chunk_size=cfg.chunk_size,
             overlap=cfg.chunk_overlap,
@@ -103,7 +103,7 @@ def ingest_uploaded_file(
             cause=e,
         ) from e
 
-    if not pieces:
+    if not section_chunks:
         raise IngestionError(
             "Chunker produced 0 chunks",
             file_path=abs_path,
@@ -111,7 +111,7 @@ def ingest_uploaded_file(
         )
 
     chunks: list[Chunk] = []
-    for i, piece in enumerate(pieces):
+    for i, sc in enumerate(section_chunks):
         chunks.append(
             Chunk(
                 workspace_id=payload.workspace_id,
@@ -120,13 +120,14 @@ def ingest_uploaded_file(
                 chunk_id=f"{source_id}:{i}",
                 title=title,
                 url=url,
-                text=piece,
+                text=sc.text,
                 chunk_index=i,
                 metadata={
                     "filePath": abs_path,
                     "fileType": file_type,
                     "userId": payload.user_id,
-                    "section": None,
+                    "sectionTitle": sc.section_title,
+                    "sectionIndex": sc.section_index,
                 },
             )
         )

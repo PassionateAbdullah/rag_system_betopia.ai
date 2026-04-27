@@ -30,3 +30,68 @@ def test_empty_input():
     out = clean_query("")
     assert out.cleaned_query == ""
     assert out.rewritten_query == ""
+
+
+def test_typo_fix_sysem_to_system():
+    out = clean_query("what is the sysem vision?")
+    assert out.rewritten_query == "what is the system vision"
+
+
+def test_typo_fix_preserves_capitalization():
+    out = clean_query("Sysem Vision overview")
+    assert "System" in out.rewritten_query
+    assert "Vision" in out.rewritten_query
+
+
+def test_typo_fix_does_not_touch_correct_words():
+    out = clean_query("explain the qdrant vector search")
+    assert "qdrant" in out.rewritten_query.lower()
+    assert "vector" in out.rewritten_query.lower()
+
+
+def test_strips_chatty_filler_clause():
+    out = clean_query(
+        "what was the mvp rag, im curious can you precisely give me this"
+    )
+    rw = out.rewritten_query.lower()
+    assert "mvp rag" in rw
+    assert "curious" not in rw
+    assert "precisely" not in rw
+    assert "give me" not in rw
+
+
+def test_strips_tell_me_about_phrase():
+    out = clean_query("tell me about Qdrant retrieval")
+    rw = out.rewritten_query
+    assert "Qdrant" in rw
+    assert "retrieval" in rw
+    assert "tell me" not in rw.lower()
+
+
+def test_strips_i_would_like_to_know():
+    out = clean_query("I would like to know how reranking works")
+    rw = out.rewritten_query.lower()
+    assert "reranking" in rw
+    assert "would like to know" not in rw
+
+
+def test_strips_in_detail_filler():
+    out = clean_query("system vision in detail")
+    rw = out.rewritten_query.lower()
+    assert "system vision" in rw
+    assert "in detail" not in rw
+
+
+def test_clause_selection_drops_pure_filler():
+    out = clean_query("MVP architecture, can you precisely give me this")
+    rw = out.rewritten_query.lower()
+    assert "mvp architecture" in rw
+    # filler clause removed
+    assert "give me" not in rw
+
+
+def test_does_not_blank_out_short_filler_only_query():
+    """Edge case: query is entirely filler. We must not return ''."""
+    out = clean_query("im curious")
+    # Either returns the original-ish text or some non-empty fallback.
+    assert out.rewritten_query != ""

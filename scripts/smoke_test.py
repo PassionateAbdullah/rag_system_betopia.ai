@@ -73,30 +73,40 @@ def main() -> int:
     assert summary["files"] >= 1, "no files ingested"
     assert summary["chunks"] >= 1, "no chunks ingested"
 
-    print("\n== Query (no debug)")
+    print("\n== Query: typo fix + retrieval")
     pkg = run_rag_tool(
-        RagInput(query="How does Betopia pricing work?"),
+        RagInput(query="What is the sysem vision?"),
         config=cfg,
         embedder=embedder,
         store=store,
     ).to_dict()
-    print(json.dumps(pkg, indent=2)[:1500])
-    assert pkg["query"] == "How does Betopia pricing work?"
-    assert "rewrittenQuery" in pkg
+    print(json.dumps(pkg, indent=2)[:1800])
+    expected_keys = {
+        "original_query",
+        "rewritten_query",
+        "context_for_agent",
+        "evidence",
+        "confidence",
+        "coverage_gaps",
+        "retrieval_trace",
+    }
+    assert expected_keys.issubset(pkg.keys()), f"missing keys: {expected_keys - set(pkg.keys())}"
+    assert pkg["original_query"] == "What is the sysem vision?"
+    assert "system" in pkg["rewritten_query"].lower(), "typo fix did not run"
+    assert isinstance(pkg["context_for_agent"], list)
     assert isinstance(pkg["evidence"], list)
-    assert isinstance(pkg["citations"], list)
-    assert "estimatedTokens" in pkg["usage"]
-    assert "debug" not in pkg, "debug must be hidden by default"
+    assert isinstance(pkg["coverage_gaps"], list)
+    assert 0.0 <= pkg["confidence"] <= 1.0
 
-    print("\n== Query (debug=True)")
+    print("\n== Query 2")
     pkg2 = run_rag_tool(
-        {"query": "What is intentionally NOT in the MVP?", "debug": True},
+        {"query": "What is intentionally NOT in the MVP?"},
         config=cfg,
         embedder=embedder,
         store=store,
     ).to_dict()
-    assert "debug" in pkg2
-    print(json.dumps(pkg2["debug"], indent=2))
+    assert "retrieval_trace" in pkg2
+    print(json.dumps(pkg2["retrieval_trace"], indent=2))
 
     # Cleanup
     print("\n== Cleanup")

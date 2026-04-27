@@ -6,8 +6,22 @@ consumes — the RAG layer does **not** generate the final natural-language answ
 ## Pipeline
 
 ```
-query → cleaner → embed → Qdrant top-K → dedupe → token-budget trim → EvidencePackage
+query
+  → cleaner (typo fix + lead-in strip)
+  → embed
+  → Qdrant top-K
+  → dedupe (chunkId / sourceId+index / exact text)
+  → rerank (vector + section-heading overlap + term overlap)
+  → token-budget select
+  → per-chunk extractive compress (sentences containing query terms + neighbors)
+  → EvidencePackage
 ```
+
+**Section-aware ingestion.** PDFs and markdown are split into top-level
+sections by markdown `#`/`##` headings or numbered headings like
+`4. System Vision`. Chunks never cross those boundaries — a chunk in
+`4. System Vision` will not bleed into `5. GPU Server Findings`. Each
+chunk records `metadata.sectionTitle` so the reranker can boost it.
 
 Storage layer: Qdrant only. No Postgres, Elasticsearch, Meilisearch, reranker,
 LLM compression, or MCP in the MVP — those land in the production system later.
@@ -57,8 +71,16 @@ curl http://localhost:6333/collections
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e .[local-embeddings,dev]
+pip install -e .[local-embeddings,markitdown,ui,dev]
 ```
+
+Extras:
+- `local-embeddings` — `sentence-transformers` (BGE-M3 by default). Skip if
+  you'll use the HTTP embedding provider instead.
+- `markitdown` — Microsoft markitdown for DOCX/XLSX/PPTX/HTML/CSV + better
+  PDF extraction. Skip and PDFs fall back to `pypdf`.
+- `ui` — Streamlit test harness (`streamlit run ui/app.py`).
+- `dev` — pytest, ruff, mypy.
 
 If you cannot install `sentence-transformers` (heavy), skip `local-embeddings` and
 set `EMBEDDING_PROVIDER=http` with an OpenAI-compatible endpoint.
@@ -129,31 +151,69 @@ Other flags: `--max-tokens`, `--max-chunks`, `--workspace-id`, `--user-id`.
 
 ```json
 {
-  "query": "How does Betopia pricing work?",
-  "rewrittenQuery": "How does Betopia pricing work",
+  "original_query": "what is the sysem vision?",
+  "rewritten_query": "what is the system vision",
+  "context_for_agent": [
+    {
+      "sourceId": "file:abc123",
+      "chunkId": "file:abc123:5",
+      "title": "design.pdf",
+      "url": "/abs/path/design.pdf",
+      "sectionTitle": "4. System Vision",
+      "text": "The system collects data and routes it through retrieval...",
+      "score": 0.94
+    }
+  ],
   "evidence": [
     {
       "sourceId": "file:abc123",
       "sourceType": "document",
-      "chunkId": "file:abc123:0",
-      "title": "sample.md",
-      "url": "/abs/path/sample.md",
-      "text": "...",
-      "score": 0.91,
-      "metadata": {"chunkIndex": 0, "filePath": "...", "section": null}
+      "chunkId": "file:abc123:5",
+      "title": "design.pdf",
+      "url": "/abs/path/design.pdf",
+      "text": "(full chunk text, pre-compression)",
+      "score": 0.78,
+      "rerankScore": 0.94,
+      "sectionTitle": "4. System Vision",
+      "metadata": {
+        "chunkIndex": 5,
+        "filePath": "...",
+        "fileType": "pdf",
+        "sectionTitle": "4. System Vision",
+        "sectionIndex": 3,
+        "rerankSignals": {"vectorScore": 0.78, "headingOverlap": 2, "termOverlap": 3}
+      }
     }
   ],
-  "citations": [
-    {"sourceId": "file:abc123", "chunkId": "file:abc123:0",
-     "title": "sample.md", "url": "/abs/path/sample.md"}
-  ],
-  "usage": {"estimatedTokens": 312, "maxTokens": 4000, "returnedChunks": 1}
+  "confidence": 0.83,
+  "coverage_gaps": [],
+  "retrieval_trace": {
+    "rewrittenQuery": "what is the system vision",
+    "retrievedCount": 20,
+    "dedupedCount": 14,
+    "rerankedCount": 14,
+    "selectedCount": 4,
+    "estimatedTokens": 612,
+    "maxTokens": 4000,
+    "maxChunks": 8,
+    "topVectorScore": 0.78,
+    "topRerankScore": 0.94,
+    "topSectionTitle": "4. System Vision",
+    "embeddingModel": "BAAI/bge-m3",
+    "vectorDim": 1024,
+    "qdrantCollection": "betopia_rag_mvp"
+  }
 }
 ```
 
-With `--debug` an extra `debug` block is included
-(`retrievedCount`, `dedupedCount`, `finalCount`, `qdrantCollection`,
-`embeddingModel`, `vectorDim`, `rewrittenQuery`).
+- `context_for_agent` — compressed, agent-ready text. Only sentences containing
+  query content terms (with one-sentence neighbors) survive. This is what the
+  outer LLM agent sees.
+- `evidence` — full reranked trail with vector + rerank scores + signals, for
+  audit.
+- `confidence` — 0..1, derived from top vector score and query-term coverage.
+- `coverage_gaps` — query content terms not present in any selected chunk.
+- `retrieval_trace` — per-stage counts + scores + collection/model names.
 
 ## Programmatic use
 
@@ -226,10 +286,25 @@ result = ingest_uploaded_file(
 
 ### Supported file types
 
+Default install (no extras):
 - `.txt`, `.md`, `.markdown` — read as UTF-8
-- `.pdf` — extracted via `pypdf` (pure Python, no system deps)
+- `.pdf` — extracted via `pypdf` (raw text only; visual headings are flattened)
 
-Other types raise `IngestionError(stage="validate")`.
+With `[markitdown]` extra installed:
+- `.pdf` — converted to markdown via Microsoft
+  [markitdown](https://github.com/microsoft/markitdown) so visual headings
+  become `# `/`## ` markers. The section-aware chunker then splits cleanly
+  on those headings instead of relying on numbered patterns alone.
+- `.docx`, `.xlsx`, `.xls`, `.pptx`, `.html`, `.htm`, `.csv` — converted to
+  markdown (tables preserved).
+
+Install:
+
+```bash
+pip install -e .[markitdown]
+```
+
+Anything else raises `IngestionError(stage="validate")`.
 
 ## Test UI (Streamlit)
 

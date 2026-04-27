@@ -17,6 +17,12 @@ local-embeddings = [
 ui = [
     "streamlit>=1.36.0",
 ]
+markitdown = [
+    # Microsoft markitdown: PDF/DOCX/XLSX/PPTX/HTML/CSV -> clean markdown
+    # with headings preserved. Without this extra, pypdf is used for PDFs
+    # and only .txt/.md/.pdf are supported.
+    "markitdown[all]>=0.1.0",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",

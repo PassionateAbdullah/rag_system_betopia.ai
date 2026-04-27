@@ -1,19 +1,58 @@
-"""File walking + per-extension text extraction."""
+"""File walking + per-extension text extraction.
+
+Two extraction backends:
+
+1. **Plain text** (`.txt`, `.md`, `.markdown`) — read directly as UTF-8.
+   No conversion needed; markdown is already what the chunker wants.
+
+2. **Structured / binary formats** (`.pdf`, `.docx`, `.xlsx`, `.pptx`,
+   `.html`, `.htm`, `.csv`) — converted to markdown via Microsoft
+   markitdown when the optional `[markitdown]` extra is installed.
+   This preserves headings/tables so the section-aware chunker can
+   detect `# Heading` / `## Subheading` boundaries.
+
+3. **PDF fallback** — when markitdown is not installed, PDFs fall back
+   to pypdf raw-text extraction. Headings are not preserved in this
+   path, so the chunker relies on numbered-heading detection only.
+"""
 from __future__ import annotations
 
 import os
+import warnings
 from collections.abc import Iterator
 
 # Plain-text formats handled inline.
 _TEXT_EXTS = {".txt", ".md", ".markdown"}
-# PDF handled via optional pypdf import; .pdf is "supported" only if pypdf is available.
+# Always-available via pypdf fallback.
 _PDF_EXTS = {".pdf"}
+# Only available when markitdown is installed.
+_MARKITDOWN_EXTS = {".docx", ".xlsx", ".xls", ".pptx", ".html", ".htm", ".csv"}
 
-SUPPORTED_EXTS = _TEXT_EXTS | _PDF_EXTS
+
+def _markitdown_available() -> bool:
+    try:
+        import markitdown  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def supported_exts() -> set[str]:
+    """Return the set of extensions actually loadable in this environment."""
+    exts = _TEXT_EXTS | _PDF_EXTS
+    if _markitdown_available():
+        exts |= _MARKITDOWN_EXTS
+    return exts
+
+
+# Static superset for callers that just need to know what *could* work
+# given the right extras installed.
+SUPPORTED_EXTS = _TEXT_EXTS | _PDF_EXTS | _MARKITDOWN_EXTS
 
 
 def detect_file_type(path: str) -> str:
-    """Returns one of: 'text', 'markdown', 'pdf', 'unknown'."""
+    """Returns one of: 'text', 'markdown', 'pdf', 'docx', 'xlsx', 'pptx',
+    'html', 'csv', 'unknown'."""
     _, ext = os.path.splitext(path.lower())
     if ext in (".md", ".markdown"):
         return "markdown"
@@ -21,21 +60,46 @@ def detect_file_type(path: str) -> str:
         return "text"
     if ext == ".pdf":
         return "pdf"
+    if ext == ".docx":
+        return "docx"
+    if ext in (".xlsx", ".xls"):
+        return "xlsx"
+    if ext == ".pptx":
+        return "pptx"
+    if ext in (".html", ".htm"):
+        return "html"
+    if ext == ".csv":
+        return "csv"
     return "unknown"
 
 
 def is_supported(path: str) -> bool:
     _, ext = os.path.splitext(path.lower())
-    return ext in SUPPORTED_EXTS
+    return ext in supported_exts()
 
 
 def extract_text(path: str) -> str:
-    """Extract raw text from a single file. Raises ValueError on unsupported types."""
+    """Extract text/markdown from a single file.
+
+    Routing:
+      - .txt/.md/.markdown -> read raw
+      - .pdf               -> markitdown if available, else pypdf
+      - .docx/.xlsx/.pptx/.html/.csv -> markitdown (required)
+    """
     ftype = detect_file_type(path)
     if ftype in ("text", "markdown"):
         return _read_text(path)
     if ftype == "pdf":
-        return _read_pdf(path)
+        if _markitdown_available():
+            return _read_with_markitdown(path)
+        return _read_pdf_with_pypdf(path)
+    if ftype in ("docx", "xlsx", "pptx", "html", "csv"):
+        if not _markitdown_available():
+            raise RuntimeError(
+                f"{ftype.upper()} support requires the markitdown extra. "
+                "Install with: pip install -e .[markitdown]"
+            )
+        return _read_with_markitdown(path)
     raise ValueError(f"Unsupported file type: {path}")
 
 
@@ -56,7 +120,6 @@ def load_files(root: str) -> Iterator[tuple[str, str]]:
                 try:
                     yield full, extract_text(full)
                 except Exception as e:
-                    # Skip individual failures during a directory walk; let caller log.
                     print(f"[skip] {full}: {e}")
 
 
@@ -65,7 +128,7 @@ def _read_text(path: str) -> str:
         return f.read()
 
 
-def _read_pdf(path: str) -> str:
+def _read_pdf_with_pypdf(path: str) -> str:
     try:
         from pypdf import PdfReader
     except ImportError as e:
@@ -82,3 +145,19 @@ def _read_pdf(path: str) -> str:
         if text:
             parts.append(text)
     return "\n\n".join(parts)
+
+
+def _read_with_markitdown(path: str) -> str:
+    """Convert a structured/binary file to markdown via markitdown.
+
+    pydub emits a runtime warning about ffmpeg at import time when audio
+    converters are loaded. We suppress that one-shot warning since we don't
+    use audio in the MVP and ffmpeg is irrelevant for PDF/DOCX/etc.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*ffmpeg.*")
+        from markitdown import MarkItDown
+
+    md = MarkItDown()
+    result = md.convert(path)
+    return (result.text_content or "").strip()

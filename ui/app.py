@@ -26,7 +26,7 @@ import streamlit as st
 from rag.config import load_config
 from rag.embeddings.default_provider import build_embedding_provider
 from rag.errors import IngestionError
-from rag.ingestion.file_loader import SUPPORTED_EXTS
+from rag.ingestion.file_loader import supported_exts
 from rag.ingestion.upload import ingest_uploaded_file
 from rag.pipeline.run import run_rag_tool
 from rag.types import IngestUploadInput, RagInput
@@ -110,7 +110,7 @@ def _save_upload_to_tempfile(uploaded_file) -> str:
 
 
 def _supported_exts_label() -> str:
-    return ", ".join(sorted(SUPPORTED_EXTS))
+    return ", ".join(sorted(supported_exts()))
 
 
 # ---------- tabs ----------
@@ -130,7 +130,7 @@ with tab_upload:
         f"`{_supported_exts_label()}`."
     )
 
-    accepted = [ext.lstrip(".") for ext in SUPPORTED_EXTS]
+    accepted = [ext.lstrip(".") for ext in supported_exts()]
     uploads = st.file_uploader(
         "Files",
         type=accepted,
@@ -218,14 +218,10 @@ with tab_query:
 
     query_text = st.text_input(
         "Query",
-        placeholder="e.g. How does Betopia pricing work?",
+        placeholder="e.g. what is the system vision?",
         key="query_input",
     )
-    col_run, col_debug = st.columns([1, 4])
-    with col_run:
-        run = st.button("Run query", type="primary", disabled=not query_text.strip())
-    with col_debug:
-        include_debug = st.checkbox("Include debug block", value=debug_default)
+    run = st.button("Run query", type="primary", disabled=not query_text.strip())
 
     if run and query_text.strip():
         started = time.time()
@@ -237,7 +233,7 @@ with tab_query:
                     user_id=user_id,
                     max_tokens=max_tokens,
                     max_chunks=max_chunks,
-                    debug=include_debug,
+                    debug=debug_default,
                 ),
                 config=res["cfg"],
                 embedder=res["embedder"],
@@ -251,41 +247,77 @@ with tab_query:
             )
 
             n_evidence = len(out["evidence"])
-            n_citations = len(out["citations"])
+            n_context = len(out["context_for_agent"])
+            confidence = out.get("confidence", 0.0)
+            gaps = out.get("coverage_gaps", []) or []
+
             with st.chat_message("user", avatar="🧑"):
                 st.write(query_text)
-            with st.chat_message("assistant", avatar="🧠"):
-                st.markdown(
-                    f"**RAG layer returned an EvidencePackage** "
-                    f"(in {elapsed_ms} ms).\n\n"
-                    f"- rewrittenQuery: `{out['rewrittenQuery']}`\n"
-                    f"- evidence chunks: **{n_evidence}**\n"
-                    f"- distinct citations: **{n_citations}**\n"
-                    f"- estimated tokens: **{out['usage']['estimatedTokens']}** / "
-                    f"{out['usage']['maxTokens']}\n\n"
-                    "Below is what the outer agent would see."
-                )
 
-            st.subheader("Evidence chunks (sorted by score)")
-            if n_evidence == 0:
+            rewrote = out["rewritten_query"] != out["original_query"]
+            with st.chat_message("assistant", avatar="🧠"):
+                msg = (
+                    f"**EvidencePackage ready** in {elapsed_ms} ms · "
+                    f"confidence **{confidence:.2f}**\n\n"
+                )
+                if rewrote:
+                    msg += (
+                        f"- rewrote: `{out['original_query']}` → "
+                        f"`{out['rewritten_query']}`\n"
+                    )
+                msg += (
+                    f"- context items for agent: **{n_context}**\n"
+                    f"- raw evidence chunks: **{n_evidence}**\n"
+                )
+                if gaps:
+                    msg += f"- coverage gaps: **{len(gaps)}**\n"
+                st.markdown(msg)
+
+                if gaps:
+                    with st.expander("Coverage gaps", expanded=False):
+                        for g in gaps:
+                            st.write(f"• {g}")
+
+            # --- context_for_agent: what the outer agent will actually see ---
+            st.subheader("Context for agent (compressed)")
+            if n_context == 0:
                 st.warning(
-                    "No evidence retrieved. Confirm the workspace was ingested "
+                    "No context selected. Confirm the workspace was ingested "
                     "and the embedder dim matches the Qdrant collection."
                 )
-            for i, ev in enumerate(out["evidence"]):
-                title = ev.get("title") or ev.get("sourceId")
+            for i, ctx in enumerate(out["context_for_agent"]):
+                section = ctx.get("sectionTitle") or "(no section)"
+                title = ctx.get("title") or ctx.get("sourceId")
                 with st.expander(
-                    f"#{i + 1} · score {ev['score']:.4f} · {title}", expanded=(i == 0)
+                    f"#{i + 1} · score {ctx['score']:.4f} · "
+                    f"{section} · {title}",
+                    expanded=(i == 0),
                 ):
-                    st.markdown(f"**sourceId:** `{ev['sourceId']}`")
-                    st.markdown(f"**chunkId:** `{ev['chunkId']}`")
-                    st.markdown(f"**url:** `{ev['url']}`")
-                    st.text(ev["text"])
-                    st.json(ev["metadata"])
+                    st.markdown(f"**sectionTitle:** `{section}`")
+                    st.markdown(f"**sourceId:** `{ctx['sourceId']}`")
+                    st.markdown(f"**chunkId:** `{ctx['chunkId']}`")
+                    st.markdown(f"**url:** `{ctx['url']}`")
+                    st.text(ctx["text"])
 
-            st.subheader("Citations")
-            st.json(out["citations"], expanded=False)
+            # --- raw evidence trail ---
+            with st.expander("Raw evidence trail (pre-compression)"):
+                for i, ev in enumerate(out["evidence"]):
+                    section = ev.get("sectionTitle") or "(no section)"
+                    st.markdown(
+                        f"**#{i + 1}** · vector `{ev['score']:.4f}` · "
+                        f"rerank `{ev['rerankScore']:.4f}` · {section}"
+                    )
+                    st.text(ev["text"][:600] + ("..." if len(ev["text"]) > 600 else ""))
+                    sigs = (ev.get("metadata") or {}).get("rerankSignals")
+                    if sigs:
+                        st.caption(f"signals: {sigs}")
+                    st.divider()
 
+            # --- retrieval trace ---
+            with st.expander("Retrieval trace"):
+                st.json(out.get("retrieval_trace") or {})
+
+            # --- raw JSON ---
             st.subheader("Full EvidencePackage JSON")
             st.code(json.dumps(out, indent=2, ensure_ascii=False), language="json")
 

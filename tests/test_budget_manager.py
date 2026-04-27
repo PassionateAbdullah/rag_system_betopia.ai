@@ -1,4 +1,9 @@
-from rag.pipeline.budget_manager import apply_token_budget, estimate_tokens
+from rag.pipeline.budget_manager import (
+    apply_token_budget,
+    estimate_tokens,
+    select_with_mmr,
+)
+from rag.pipeline.reranker import RerankedChunk
 from rag.types import RetrievedChunk
 
 
