@@ -231,6 +231,42 @@ result = ingest_uploaded_file(
 
 Other types raise `IngestionError(stage="validate")`.
 
+## Test UI (Streamlit)
+
+A developer evaluation harness — drop files, watch them auto-ingest, then run
+queries and inspect the raw `EvidencePackage` the outer agent will consume.
+Same code paths as the backend (`ingest_uploaded_file` + `run_rag_tool`).
+No LLM is called.
+
+Install:
+
+```bash
+pip install -e .[ui,local-embeddings]
+# or, if using a remote embedding API:
+pip install -e .[ui]   # then set EMBEDDING_PROVIDER=http in .env
+```
+
+Run:
+
+```bash
+streamlit run ui/app.py
+```
+
+Then open the URL Streamlit prints. Tabs:
+
+- **Upload & Ingest** — multi-file uploader (`.txt`, `.md`, `.pdf`). Each file
+  is saved to a temp path and auto-fed through `ingest_uploaded_file`. Per-file
+  status (chunks created, elapsed ms) shown as a chat message; failures show
+  the `stage` and `reason` from `IngestionError`.
+- **Query** — type a question; returns the rewritten query, evidence chunks
+  (sorted by score, expandable with text + metadata), citations, usage block,
+  and the full `EvidencePackage` JSON. Toggle `debug` to include the
+  retrieved/deduped/final counts.
+- **Session log** — every ingest + query in this session, for quick eval review.
+
+Sidebar lets you change `workspaceId`, `userId`, `maxChunks`, `maxTokens`, and
+shows live Qdrant point count + embedding model info.
+
 ## Tests
 
 ```bash
