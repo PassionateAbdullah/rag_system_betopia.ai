@@ -78,6 +78,11 @@ def _cfg() -> Config:
         api_key="",
         api_cors_origins="*",
         api_max_upload_mb=50,
+        query_rewriter="rules",
+        query_rewriter_model="",
+        query_rewriter_base_url="",
+        query_rewriter_api_key="",
+        query_rewriter_timeout=5.0,
     )
 
 

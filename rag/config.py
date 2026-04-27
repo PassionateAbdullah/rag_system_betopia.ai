@@ -23,6 +23,13 @@ def _env_str(key: str, default: str = "") -> str:
     return raw if raw is not None and raw != "" else default
 
 
+def _env_float(key: str, default: float) -> float:
+    raw = os.getenv(key)
+    if raw is None or raw == "":
+        return default
+    return float(raw)
+
+
 @dataclass
 class Config:
     # Qdrant
@@ -52,6 +59,13 @@ class Config:
     api_cors_origins: str
     api_max_upload_mb: int
 
+    # Query rewriter
+    query_rewriter: str               # "rules" (default) | "llm"
+    query_rewriter_model: str
+    query_rewriter_base_url: str
+    query_rewriter_api_key: str
+    query_rewriter_timeout: float
+
 
 def load_config() -> Config:
     return Config(
@@ -74,4 +88,9 @@ def load_config() -> Config:
         api_key=_env_str("RAG_API_KEY"),
         api_cors_origins=_env_str("RAG_API_CORS_ORIGINS", "*"),
         api_max_upload_mb=_env_int("RAG_API_MAX_UPLOAD_MB", 50),
+        query_rewriter=_env_str("QUERY_REWRITER", "rules").lower(),
+        query_rewriter_model=_env_str("QUERY_REWRITER_MODEL"),
+        query_rewriter_base_url=_env_str("QUERY_REWRITER_BASE_URL"),
+        query_rewriter_api_key=_env_str("QUERY_REWRITER_API_KEY"),
+        query_rewriter_timeout=_env_float("QUERY_REWRITER_TIMEOUT", 5.0),
     )

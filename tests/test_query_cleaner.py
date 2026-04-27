@@ -95,6 +95,43 @@ def test_clause_selection_drops_pure_filler():
     assert "give me" not in rw
 
 
+def test_strips_kinda_curious_and_for_now():
+    out = clean_query("what is the mvp rag structure for now im kinda curious")
+    rw = out.rewritten_query.lower()
+    assert "mvp rag structure" in rw
+    assert "for now" not in rw
+    assert "curious" not in rw
+    assert "kinda" not in rw
+
+
+def test_strips_btw_and_anyway():
+    out = clean_query("how does retrieval work btw")
+    assert "retrieval work" in out.rewritten_query.lower()
+    assert "btw" not in out.rewritten_query.lower()
+
+
+def test_strips_at_this_point_in_time():
+    out = clean_query("how chunking works at this point in time")
+    rw = out.rewritten_query.lower()
+    assert "chunking works" in rw
+    assert "point in time" not in rw
+
+
+def test_strips_thanks_and_please_anywhere():
+    out = clean_query("thanks, can you show me the pricing tiers please")
+    rw = out.rewritten_query.lower()
+    assert "pricing tiers" in rw
+    assert "thanks" not in rw
+    assert "please" not in rw
+
+
+def test_strips_sorta_curious():
+    out = clean_query("im sorta curious about embeddings")
+    rw = out.rewritten_query.lower()
+    assert "embeddings" in rw
+    assert "curious" not in rw
+
+
 def test_does_not_blank_out_short_filler_only_query():
     """Edge case: query is entirely filler. We must not return ''."""
     out = clean_query("im curious")

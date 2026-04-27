@@ -226,14 +226,30 @@ Used by:
 RagInput (query, workspaceId, userId, maxTokens, maxChunks, debug)
         │
         ▼
-[clean]   clean_query(raw)
+[rewrite] Two stages, second optional:
+
+  Stage 1 (always)  clean_query(raw)
           ├── _normalize_ws            collapse whitespace
           ├── _fix_typos               sysem→system, qudrant→qdrant, …
           ├── _LEADIN_RE.sub           strip "please/could you/can you …"
-          ├── _strip_filler_phrases    "i'm curious", "tell me", "give me X", …
+          ├── _strip_filler_phrases    "i'm (kinda/sorta) curious", "tell me",
+          │                             "give me X", "for now", "right now",
+          │                             "at this point in time", "btw", "anyway",
+          │                             "thanks", "please" anywhere, …
           ├── _select_clauses          drop comma-clauses with zero content terms
           └── safety net               if rewrite is empty, fall back to cleaned form
           → CleanedQuery(original, cleaned, rewritten)
+
+  Stage 2 (optional, when QUERY_REWRITER=llm)
+          LLMQueryRewriter.rewrite(stage_1_output)
+          ├── chat-completions HTTP call (OpenAI-compatible)
+          ├── strict system prompt + 5 few-shots
+          ├── max_tokens=50, temperature=0.0, timeout=5s
+          └── any error → fall back to stage-1 output (retrieval never blocks)
+          → final_rewrite
+
+  Trace records: rewriterUsed ∈ {"rules", "llm"}, rewriterModel, rewriterError,
+                 rulesRewrittenQuery (always the stage-1 result, for diff).
         │
         ▼
 [retrieve] retrieve(rewritten_query, embedder, store, top_k=20, workspaceId)

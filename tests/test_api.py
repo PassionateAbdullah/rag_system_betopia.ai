@@ -113,6 +113,11 @@ def _make_cfg(**overrides: Any) -> Config:
         api_key="",
         api_cors_origins="*",
         api_max_upload_mb=5,
+        query_rewriter="rules",
+        query_rewriter_model="",
+        query_rewriter_base_url="",
+        query_rewriter_api_key="",
+        query_rewriter_timeout=5.0,
     )
     base.update(overrides)
     return Config(**base)

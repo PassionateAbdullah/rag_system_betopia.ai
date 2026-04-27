@@ -96,10 +96,18 @@ TYPO_MAP: dict[str, str] = {
 # Conversational fluff that adds no retrieval signal. Order matters: longer
 # patterns first so they consume the bigger phrase before shorter overlapping
 # ones get a chance.
+# Intensifier group used inside curiosity / wish phrases. Captures
+# "im just curious", "im kinda curious", "im sort of curious", etc.
+_CURIOUS_INTENSIFIER = (
+    r"(?:just\s+|really\s+|quite\s+|very\s+|kinda\s+|kind\s+of\s+|"
+    r"sorta\s+|sort\s+of\s+|a\s+(?:bit|little)\s+|somewhat\s+|"
+    r"genuinely\s+|honestly\s+)?"
+)
+
 _FILLER_PHRASE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(p, re.IGNORECASE)
     for p in (
-        # Stretches of "can/could you (please/precisely) tell/give/show/etc me ..."
+        # "can/could you (please/precisely) tell/give/show/etc me ..."
         r"\b(?:can|could|would|will)\s+you\s+(?:please\s+|kindly\s+|precisely\s+)?"
         r"(?:tell|give|show|explain|describe|share|provide)\s+me\s+"
         r"(?:about|more\s+about|on|with|of|the|this|that|these|those)*\b",
@@ -107,12 +115,13 @@ _FILLER_PHRASE_PATTERNS: list[re.Pattern[str]] = [
         r"(?:explain|describe|elaborate|clarify|summarize)\b",
         r"\b(?:can|could)\s+you\s+(?:precisely\s+|please\s+)?"
         r"give\s+me\s+(?:this|that|it)\b",
-        # Stand-alone curiosity / wish phrases
-        r"\bi'?m\s+(?:just\s+|really\s+|quite\s+|very\s+)?curious\b",
-        r"\bi\s+am\s+(?:just\s+|really\s+|quite\s+|very\s+)?curious\b",
+        # Curiosity / wish phrases (with broad intensifier group).
+        rf"\bi'?m\s+{_CURIOUS_INTENSIFIER}curious\b",
+        rf"\bi\s+am\s+{_CURIOUS_INTENSIFIER}curious\b",
         r"\bi\s+wonder\b",
-        r"\bjust\s+wondering\b",
+        r"\b(?:just\s+|kinda\s+)?wondering\b",
         r"\bi\s+(?:would|'d)\s+like\s+to\s+know\b",
+        r"\bi\s+(?:would|'d)\s+love\s+to\s+know\b",
         r"\bi\s+want\s+to\s+know\b",
         r"\bi\s+want\s+to\s+understand\b",
         r"\bi\s+need\s+to\s+know\b",
@@ -122,17 +131,40 @@ _FILLER_PHRASE_PATTERNS: list[re.Pattern[str]] = [
         r"\bgive\s+me\s+(?:this|that|it|details|info|information)?\b",
         r"\bshow\s+me\s+(?:this|that|it)?\b",
         r"\bplease\s+(?:explain|describe|tell|give|show|elaborate|clarify)\b",
-        # Lead-ins
+        # Greetings
         r"\bhey\s+there\b",
         r"\bhi\s+there\b",
         r"\bhello\s+there\b",
-        # Fillers
+        # Time / context fillers ("for now", "right now", "at the moment", ...)
+        r"\bfor\s+now\b",
+        r"\bright\s+now\b",
+        r"\bat\s+(?:the\s+)?moment\b",
+        r"\bat\s+this\s+point\s+in\s+time\b",
+        r"\bat\s+this\s+(?:point|time|moment)\b",
+        r"\bin\s+time\b",
+        r"\bcurrently\b",
+        r"\bnowadays\b",
+        # Conversational asides
+        r"\b(?:btw|by\s+the\s+way)\b",
+        r"\banyway[s]?\b",
+        r"\bjust\s+(?:asking|checking|wanted\s+to\s+ask)\b",
+        r"\bif\s+(?:you|that|that's)\s+(?:make\s+sense|makes\s+sense|ok|okay|alright)\b",
+        # Hedge / intensity adverbs that add no retrieval signal
         r"\bin\s+detail\b",
         r"\bin\s+depth\b",
         r"\bbriefly\b",
         r"\bprecisely\b",
         r"\bexactly\b",
+        r"\bbasically\b",
+        r"\bactually\b",
+        r"\breally\b",
+        r"\bquickly\b",
         r"\bi\s+(?:was|am)\s+(?:just\s+)?(?:asking|thinking|wondering)\b",
+        # Standalone politeness words anywhere (lead-in regex only catches at start).
+        r"\bplease\b",
+        r"\bkindly\b",
+        r"\bthanks?\b",
+        r"\bthank\s+you\b",
     )
 ]
 

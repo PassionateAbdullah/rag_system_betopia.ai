@@ -23,6 +23,7 @@ from rag.pipeline.budget_manager import (
 )
 from rag.pipeline.deduper import dedupe
 from rag.pipeline.evidence_builder import build_evidence_package
+from rag.pipeline.llm_rewriter import build_llm_rewriter_from_env
 from rag.pipeline.query_cleaner import clean_query
 from rag.pipeline.reranker import rerank
 from rag.pipeline.retriever import retrieve
@@ -52,10 +53,35 @@ def run_rag_tool(
         vector_size=emb.dim,
     )
 
+    # ---------- query rewrite chain ----------
+    # Stage 1 (always): rule-based — typo fix + lead-in + filler + clause select.
     cleaned = clean_query(rag_input.query)
+    rewriter_used = "rules"
+    rewriter_model: str | None = None
+    rewriter_error: str | None = None
+    final_rewrite = cleaned.rewritten_query
+
+    # Stage 2 (optional): LLM polish on top of rule-based result.
+    if cfg.query_rewriter == "llm":
+        llm = build_llm_rewriter_from_env(
+            base_url=cfg.query_rewriter_base_url,
+            api_key=cfg.query_rewriter_api_key,
+            model=cfg.query_rewriter_model,
+            timeout=cfg.query_rewriter_timeout,
+        )
+        if llm is None:
+            rewriter_error = "QUERY_REWRITER=llm but base_url/model not configured"
+        else:
+            result = llm.rewrite(cleaned.rewritten_query)
+            rewriter_model = result.model
+            if result.used_llm and result.rewritten:
+                final_rewrite = result.rewritten
+                rewriter_used = "llm"
+            else:
+                rewriter_error = result.error or "llm did not return a usable rewrite"
 
     retrieved = retrieve(
-        query=cleaned.rewritten_query,
+        query=final_rewrite,
         embedder=emb,
         store=s,
         top_k=cfg.retrieve_top_k,
@@ -65,7 +91,7 @@ def run_rag_tool(
     deduped = dedupe(retrieved)
     duplicates_dropped = len(retrieved) - len(deduped)
 
-    reranked = rerank(cleaned.rewritten_query, deduped)
+    reranked = rerank(final_rewrite, deduped)
     selected, est_tokens_pre = select_with_mmr(
         reranked,
         max_tokens=rag_input.max_tokens,
@@ -74,10 +100,10 @@ def run_rag_tool(
 
     pkg = build_evidence_package(
         original_query=cleaned.original_query,
-        rewritten_query=cleaned.rewritten_query,
+        rewritten_query=final_rewrite,
         reranked=reranked,
         selected=selected,
-        retrieval_trace={},  # filled below so we can include compression stats
+        retrieval_trace={},
     )
 
     # Compression metrics: how much we shaved per chunk.
@@ -87,7 +113,11 @@ def run_rag_tool(
     est_tokens_post = sum(estimate_tokens(c.text) for c in pkg.context_for_agent)
 
     pkg.retrieval_trace = {
-        "rewrittenQuery": cleaned.rewritten_query,
+        "rewrittenQuery": final_rewrite,
+        "rulesRewrittenQuery": cleaned.rewritten_query,
+        "rewriterUsed": rewriter_used,
+        "rewriterModel": rewriter_model,
+        "rewriterError": rewriter_error,
         "retrievedCount": len(retrieved),
         "duplicatesDropped": duplicates_dropped,
         "dedupedCount": len(deduped),
