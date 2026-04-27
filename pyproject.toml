@@ -23,6 +23,11 @@ markitdown = [
     # and only .txt/.md/.pdf are supported.
     "markitdown[all]>=0.1.0",
 ]
+api = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "python-multipart>=0.0.9",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
@@ -33,6 +38,7 @@ dev = [
 [project.scripts]
 rag-ingest = "rag.cli.ingest:main"
 rag-query = "rag.cli.query:main"
+rag-api = "rag.api.server:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
@@ -49,6 +55,10 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI dependency-injection pattern: File(...), Form(...), Depends(...) used as defaults.
+"rag/api/app.py" = ["B008"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

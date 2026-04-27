@@ -73,6 +73,11 @@ def _cfg() -> Config:
         max_tokens=4000,
         chunk_size=600,
         chunk_overlap=100,
+        api_host="127.0.0.1",
+        api_port=8080,
+        api_key="",
+        api_cors_origins="*",
+        api_max_upload_mb=50,
     )
 
 

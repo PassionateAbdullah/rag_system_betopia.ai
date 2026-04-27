@@ -45,6 +45,13 @@ class Config:
     chunk_size: int
     chunk_overlap: int
 
+    # API server
+    api_host: str
+    api_port: int
+    api_key: str
+    api_cors_origins: str
+    api_max_upload_mb: int
+
 
 def load_config() -> Config:
     return Config(
@@ -62,4 +69,9 @@ def load_config() -> Config:
         max_tokens=_env_int("RAG_MAX_TOKENS", 4000),
         chunk_size=_env_int("RAG_CHUNK_SIZE", 600),
         chunk_overlap=_env_int("RAG_CHUNK_OVERLAP", 100),
+        api_host=_env_str("RAG_API_HOST", "0.0.0.0"),
+        api_port=_env_int("RAG_API_PORT", 8080),
+        api_key=_env_str("RAG_API_KEY"),
+        api_cors_origins=_env_str("RAG_API_CORS_ORIGINS", "*"),
+        api_max_upload_mb=_env_int("RAG_API_MAX_UPLOAD_MB", 50),
     )

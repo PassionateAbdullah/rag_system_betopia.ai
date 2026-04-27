@@ -1,0 +1,1276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Betopia RAG MVP — Architecture &amp; Developer Guide</title>
+
+<style>
+:root { color-scheme: light dark; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  max-width: 920px;
+  margin: 32px auto;
+  padding: 0 24px 80px;
+  line-height: 1.55;
+  color: #1f2328;
+}
+h1, h2, h3, h4 { line-height: 1.25; margin-top: 1.6em; }
+h1 { border-bottom: 2px solid #d0d7de; padding-bottom: .3em; }
+h2 { border-bottom: 1px solid #d0d7de; padding-bottom: .25em; }
+code { background: #f6f8fa; padding: 2px 5px; border-radius: 4px; font-size: 90%; }
+pre { background: #0d1117; color: #e6edf3; padding: 14px 16px; border-radius: 6px;
+      overflow-x: auto; font-size: 13px; line-height: 1.45; }
+pre code { background: transparent; padding: 0; color: inherit; font-size: inherit; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 14px; }
+th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+th { background: #f6f8fa; }
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+hr { border: none; border-top: 1px solid #d0d7de; margin: 2em 0; }
+blockquote { color: #57606a; border-left: 4px solid #d0d7de; padding: 4px 12px; margin: 1em 0; }
+
+@media (prefers-color-scheme: dark) {
+  body { background: #0d1117; color: #c9d1d9; }
+  h1 { border-color: #30363d; }
+  h2 { border-color: #30363d; }
+  code { background: #161b22; }
+  th, td { border-color: #30363d; }
+  th { background: #161b22; }
+  a { color: #58a6ff; }
+  hr { border-color: #30363d; }
+  blockquote { color: #8b949e; border-color: #30363d; }
+}
+
+@media print {
+  body { max-width: none; margin: 0; padding: 16px 24px; }
+  pre, code { background: #f6f8fa !important; color: #1f2328 !important; }
+  a { color: inherit; text-decoration: none; }
+  h1, h2 { page-break-after: avoid; }
+  pre, table { page-break-inside: avoid; }
+}
+</style>
+
+</head>
+<body>
+<h1 id="betopia-rag-mvp-architecture-developer-guide">Betopia RAG MVP — Architecture &amp; Developer Guide</h1>
+<p>A complete reference for the RAG system in this repository: what it does, how
+it is wired, the execution order of every stage, and the purpose of each
+function. Use this as the onboarding document for any developer who needs to
+extend, debug, or integrate the system.</p>
+<hr />
+<h2 id="table-of-contents">Table of contents</h2>
+<ol>
+<li><a href="#1-goal--boundaries">Goal &amp; boundaries</a></li>
+<li><a href="#2-high-level-system-map">High-level system map</a></li>
+<li><a href="#3-repository-layout">Repository layout</a></li>
+<li><a href="#4-flow-a--ingestion-ingest_uploaded_file">Flow A — Ingestion (<code>ingest_uploaded_file</code>)</a></li>
+<li><a href="#5-flow-b--query-run_rag_tool">Flow B — Query (<code>run_rag_tool</code>)</a></li>
+<li><a href="#6-module-reference-every-public-function">Module reference (every public function)</a></li>
+<li><a href="#7-data-shapes">Data shapes</a></li>
+<li><a href="#8-configuration-env-vars">Configuration (env vars)</a></li>
+<li><a href="#9-integration-surfaces">Integration surfaces</a></li>
+<li><a href="#10-testing-map">Testing map</a></li>
+<li><a href="#11-tuning-knobs">Tuning knobs</a></li>
+<li><a href="#12-what-is-intentionally-not-in-the-mvp">What is intentionally NOT in the MVP</a></li>
+<li><a href="#13-upgrade-path-to-production">Upgrade path to production</a></li>
+</ol>
+<hr />
+<h2 id="1-goal-boundaries">1. Goal &amp; boundaries</h2>
+<p><strong>Goal.</strong> Provide a minimal but production-shaped Retrieval-Augmented
+Generation system for Betopia.ai. The RAG layer ingests documents into a
+vector store and, given a query, returns a structured <strong>EvidencePackage</strong> that
+an outer LLM agent uses to compose the final answer.</p>
+<p><strong>Hard boundary.</strong> The RAG layer never generates a natural-language answer. It
+only retrieves, ranks, compresses and packages evidence. Answer generation is
+the outer agent's job.</p>
+<p><strong>MVP scope.</strong> Qdrant for vector storage. Optional <code>markitdown</code> for
+high-quality file extraction. Sentence-Transformers (BGE-M3 default) or any
+OpenAI-compatible embedding endpoint. No Postgres / Elasticsearch / cross-
+encoder reranker / LLM-based compression / MCP in this build — see §12.</p>
+<hr />
+<h2 id="2-high-level-system-map">2. High-level system map</h2>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>┌────────────────────────────────────────────────────────────────────────┐
+│                            Integration surfaces                         │
+│  CLI (rag.cli.*)    Streamlit UI (ui/app.py)    REST API (rag.api.*)    │
+│         │                     │                          │              │
+│         └─────────────────────┼──────────────────────────┘              │
+│                               ▼                                         │
+│                  ┌──────────────────────────┐                           │
+│                  │  Two main entry points    │                           │
+│                  │  • ingest_uploaded_file()│                           │
+│                  │  • run_rag_tool()        │                           │
+│                  └──────────────────────────┘                           │
+│                               │                                         │
+│      ┌────────────────────────┼────────────────────────┐                │
+│      ▼                        ▼                        ▼                │
+│  ┌────────┐            ┌────────────┐           ┌─────────────┐         │
+│  │ Loader │            │  Embedder  │           │   Qdrant    │         │
+│  │/Chunker│            │  (BGE-M3,  │           │   Store     │         │
+│  │/Compress│           │   HTTP API)│           │             │         │
+│  └────────┘            └────────────┘           └─────────────┘         │
+└────────────────────────────────────────────────────────────────────────┘
+</code></pre></div>
+
+<p>Storage and compute live behind small, swappable interfaces:</p>
+<table>
+<thead>
+<tr>
+<th>Concern</th>
+<th>Interface</th>
+<th>Default impl</th>
+<th>Swap by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Embeddings</td>
+<td><code>EmbeddingProvider</code></td>
+<td><code>SentenceTransformersProvider</code> (BGE-M3 1024-d)</td>
+<td><code>EMBEDDING_PROVIDER=http</code></td>
+</tr>
+<tr>
+<td>Vector store</td>
+<td><code>QdrantStore</code></td>
+<td>Qdrant (local or cloud)</td>
+<td><code>QDRANT_URL</code></td>
+</tr>
+<tr>
+<td>File extraction</td>
+<td><code>extract_text(path)</code></td>
+<td>markitdown if installed, else pypdf</td>
+<td>install <code>[markitdown]</code> extra</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="3-repository-layout">3. Repository layout</h2>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>rag/
+  __init__.py              # Public re-exports: run_rag_tool, ingest_uploaded_file, types, errors
+  config.py                # Env-driven Config dataclass + load_config()
+  errors.py                # IngestionError with stage tag
+  types.py                 # All dataclasses: RagInput, IngestUploadInput, Chunk,
+                           #                  RetrievedChunk, EvidencePackage, ContextItem,
+                           #                  EvidenceItem, IngestionResult, CleanedQuery
+  cli/
+    ingest.py              # python -m rag.cli.ingest &lt;path&gt;
+    query.py               # python -m rag.cli.query &quot;&lt;question&gt;&quot;
+  ingestion/
+    file_loader.py         # File walking + per-extension text extraction (markitdown / pypdf)
+    chunker.py             # Section-aware chunker (top-level heading boundaries)
+    upload.py              # ingest_uploaded_file()  ← single-file backend entry
+    ingest_pipeline.py     # ingest_paths()  ← walks dirs and calls ingest_uploaded_file
+  embeddings/
+    base.py                # EmbeddingProvider abstract class
+    default_provider.py    # SentenceTransformersProvider, HttpEmbeddingProvider
+  vector/
+    qdrant_client.py       # QdrantStore: ensure_collection / upsert_chunks / search / info
+  pipeline/
+    query_cleaner.py       # clean_query: typo fix + lead-in strip + filler-phrase + clause select
+    retriever.py           # retrieve(): embed query and search Qdrant
+    deduper.py             # dedupe(): chunkId / sourceId+index / exact-text dupe removal
+    reranker.py            # rerank(): vector + heading-overlap + term-overlap
+    compressor.py          # compress(): sentence-level extractive compression
+    budget_manager.py      # apply_token_budget + select_with_mmr (MMR diversity)
+    evidence_builder.py    # build_evidence_package: confidence + coverage_gaps
+    run.py                 # run_rag_tool() ← main query entry; orchestrates pipeline
+  api/
+    schemas.py             # Pydantic request/response models
+    app.py                 # FastAPI factory, lifespan, error handler, endpoints
+    server.py              # uvicorn entry: python -m rag.api.server
+  ui/
+    app.py                 # Streamlit harness (test only): Upload + Query + Session log
+
+scripts/
+  smoke_test.py            # End-to-end smoke against running Qdrant with FakeEmbedder
+
+tests/
+  test_*.py                # pytest suite, all hermetic (no real Qdrant or embedding model)
+
+data/docs/                 # Sample / generated test docs (gitignored otherwise)
+</code></pre></div>
+
+<hr />
+<h2 id="4-flow-a-ingestion-ingest_uploaded_file">4. Flow A — Ingestion (<code>ingest_uploaded_file</code>)</h2>
+<p><strong>Entry point:</strong> <code>rag.ingestion.upload.ingest_uploaded_file(input, *, config?, embedder?, store?) -&gt; IngestionResult</code></p>
+<p>Used by:
+- CLI (<code>rag.cli.ingest</code> → walks paths, calls per-file)
+- REST API (<code>POST /v1/ingest/upload</code>, <code>POST /v1/ingest/file</code>)
+- Streamlit UI (per uploaded file)
+- Backend code in-process (<code>from rag import ingest_uploaded_file</code>)</p>
+<h3 id="stage-diagram">Stage diagram</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>IngestUploadInput (filePath, workspaceId, userId, [sourceId, title, url])
+        │
+        ▼
+[validate]    ── exists? regular file? ext supported? ── on fail: IngestionError(stage=&quot;validate&quot;)
+        │
+        ▼
+[extract]     extract_text(path)
+              ├── .txt / .md            → read UTF-8
+              ├── .pdf (markitdown)     → markdown w/ headings preserved
+              ├── .pdf (pypdf fallback) → raw text only
+              └── .docx/.xlsx/.pptx/    → markitdown (markdown w/ tables)
+                  .html/.csv
+        │
+        ▼
+[chunk]       chunk_with_sections(text, chunk_size, overlap)
+              ├── split_into_sections() — split on top-level # / ## / &quot;N. Title&quot;
+              └── per-section word-window chunking with overlap
+                  Each chunk: {text, section_title, section_index}
+        │
+        ▼
+[store: ensure_collection]   Idempotent. Creates Qdrant collection on first use.
+        │
+        ▼
+For each batch (default 32 chunks):
+        │
+        ├── [embed]   embedder.embed([c.text for c in batch])
+        │             on fail: IngestionError(stage=&quot;embed&quot;)
+        │
+        └── [store]   QdrantStore.upsert_chunks(batch, vectors)
+                      Deterministic UUIDv5 IDs → re-ingest replaces.
+                      on fail: IngestionError(stage=&quot;store&quot;)
+        │
+        ▼
+IngestionResult(sourceId, workspaceId, title, chunksCreated, qdrantCollection, status)
+</code></pre></div>
+
+<h3 id="key-invariants">Key invariants</h3>
+<ul>
+<li><code>IngestionError.stage</code> always reflects where the failure occurred. Backend
+  surfaces <code>reason</code>, <code>filePath</code>, <code>stage</code>.</li>
+<li>Re-ingesting the same <code>(workspaceId, chunk_id)</code> overwrites in Qdrant (UUIDv5
+  derived from <code>workspaceId:chunk_id</code>).</li>
+<li>Per-chunk metadata always includes: <code>filePath</code>, <code>fileType</code>, <code>userId</code>,
+  <code>sectionTitle</code>, <code>sectionIndex</code>. Reranker uses <code>sectionTitle</code>.</li>
+</ul>
+<h3 id="function-call-graph">Function call graph</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>ingest_uploaded_file
+├── IngestUploadInput.from_dict          (if dict input)
+├── _short_hash                           (derive sourceId)
+├── detect_file_type
+├── extract_text                          (file_loader)
+│   ├── _read_text                        (.txt/.md)
+│   ├── _read_with_markitdown             (.pdf/.docx/.xlsx/...)
+│   └── _read_pdf_with_pypdf              (.pdf fallback)
+├── chunk_with_sections                   (chunker)
+│   ├── split_into_sections
+│   ├── normalize
+│   └── _normalize_line
+├── QdrantStore.ensure_collection
+└── (loop)
+    ├── EmbeddingProvider.embed
+    └── QdrantStore.upsert_chunks
+        └── _stable_uuid
+</code></pre></div>
+
+<hr />
+<h2 id="5-flow-b-query-run_rag_tool">5. Flow B — Query (<code>run_rag_tool</code>)</h2>
+<p><strong>Entry point:</strong> <code>rag.pipeline.run.run_rag_tool(input, *, config?, embedder?, store?) -&gt; EvidencePackage</code></p>
+<p>Used by:
+- CLI (<code>rag.cli.query</code>)
+- REST API (<code>POST /v1/query</code>)
+- Streamlit UI (Query tab)
+- Backend code in-process (<code>from rag import run_rag_tool</code>)</p>
+<h3 id="stage-diagram_1">Stage diagram</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>RagInput (query, workspaceId, userId, maxTokens, maxChunks, debug)
+        │
+        ▼
+[clean]   clean_query(raw)
+          ├── _normalize_ws            collapse whitespace
+          ├── _fix_typos               sysem→system, qudrant→qdrant, …
+          ├── _LEADIN_RE.sub           strip &quot;please/could you/can you …&quot;
+          ├── _strip_filler_phrases    &quot;i&#39;m curious&quot;, &quot;tell me&quot;, &quot;give me X&quot;, …
+          ├── _select_clauses          drop comma-clauses with zero content terms
+          └── safety net               if rewrite is empty, fall back to cleaned form
+          → CleanedQuery(original, cleaned, rewritten)
+        │
+        ▼
+[retrieve] retrieve(rewritten_query, embedder, store, top_k=20, workspaceId)
+           ├── EmbeddingProvider.embed_one
+           └── QdrantStore.search       (vector cosine, optional workspace filter)
+           → list[RetrievedChunk] sorted by Qdrant score desc
+        │
+        ▼
+[dedupe]   dedupe(retrieved)
+           Walks sorted by score desc; drops a later chunk if it shares any of:
+            • same chunkId
+            • same (sourceId, chunkIndex)
+            • same exact normalized text
+        │
+        ▼
+[rerank]   rerank(rewritten_query, deduped)
+           Score = vector_score
+                 + heading_weight (0.6) × (q_terms ∩ section_terms / |q_terms|)
+                 + term_weight (0.05) × (q_terms ∩ chunk_terms count)
+           Records signals: {vectorScore, headingOverlap, headingRatio,
+                             termOverlap, termRatio} for audit.
+        │
+        ▼
+[select]   select_with_mmr(reranked, max_tokens, max_chunks, lambda_=0.7)
+           First pick = top by rerank.
+           Subsequent picks maximise:
+                lambda * rerank_score
+              − (1 − lambda) * max_overlap_penalty(candidate, already_selected)
+           Penalty proxies (cheap, no extra model calls):
+              same chunk_id        → 1.0   (hard duplicate)
+              same source+section  → 0.7   (heavy overlap)
+              same source          → 0.4   (related)
+              else                 → Jaccard of content terms
+           Stops on max_chunks or max_tokens.
+        │
+        ▼
+[compress] For each selected chunk: compress(chunk.text, rewritten_query)
+           ├── split_sentences
+           ├── mark sentences with ≥1 query content term as &quot;hits&quot;
+           ├── expand hits to neighbor_radius=1 (1 sentence before + after)
+           └── if selection &lt; min_chars=60 → fall back to full chunk text
+           Builds ContextItem per selected chunk for the agent.
+        │
+        ▼
+[package]  build_evidence_package
+           ├── ContextItem[]     (compressed, agent-ready text per chunk)
+           ├── EvidenceItem[]    (raw reranked trail with signals, for audit)
+           ├── confidence        0.6 × top_vector + 0.4 × coverage_ratio (+ heading-boost nudge)
+           ├── coverage_gaps     query content terms not present anywhere in selected
+           └── retrieval_trace   per-stage counts, scores, model, collection,
+                                 selectionStrategy=&quot;mmr&quot;, compression metrics
+        │
+        ▼
+EvidencePackage  (consumed by the outer agent / LLM)
+</code></pre></div>
+
+<h3 id="function-call-graph_1">Function call graph</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>run_rag_tool
+├── RagInput.from_dict                    (if dict input)
+├── load_config                           (if no config passed)
+├── build_embedding_provider              (if no embedder passed)
+├── QdrantStore (constructor)             (if no store passed)
+├── clean_query                           (query_cleaner)
+│   ├── _fix_typos
+│   ├── _strip_filler_phrases
+│   ├── _select_clauses
+│   └── _content_token_count
+├── retrieve                              (retriever)
+│   ├── EmbeddingProvider.embed_one
+│   └── QdrantStore.search
+├── dedupe                                (deduper)
+├── rerank                                (reranker)
+│   └── content_terms
+├── select_with_mmr                       (budget_manager)
+│   ├── estimate_tokens
+│   └── _overlap_penalty → content_terms
+└── build_evidence_package                (evidence_builder)
+    ├── compress                          (compressor)
+    │   ├── split_sentences
+    │   └── content_terms
+    ├── _confidence
+    └── _coverage_gaps → content_terms
+</code></pre></div>
+
+<hr />
+<h2 id="6-module-reference-every-public-function">6. Module reference (every public function)</h2>
+<h3 id="ragtypes"><code>rag.types</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Kind</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>RagInput</code></td>
+<td>dataclass</td>
+<td>Query input; supports <code>from_dict({"query": ..., ...})</code></td>
+</tr>
+<tr>
+<td><code>IngestUploadInput</code></td>
+<td>dataclass</td>
+<td>Single-file ingest input</td>
+</tr>
+<tr>
+<td><code>IngestionResult</code></td>
+<td>dataclass</td>
+<td>Success summary returned by ingestion</td>
+</tr>
+<tr>
+<td><code>Chunk</code></td>
+<td>dataclass</td>
+<td>A pre-upsert chunk with payload metadata</td>
+</tr>
+<tr>
+<td><code>RetrievedChunk</code></td>
+<td>dataclass</td>
+<td>A Qdrant search hit (carries score)</td>
+</tr>
+<tr>
+<td><code>CleanedQuery</code></td>
+<td>dataclass</td>
+<td><code>(original, cleaned, rewritten)</code></td>
+</tr>
+<tr>
+<td><code>EvidenceItem</code></td>
+<td>dataclass</td>
+<td>One reranked chunk for the audit trail</td>
+</tr>
+<tr>
+<td><code>ContextItem</code></td>
+<td>dataclass</td>
+<td>One compressed chunk for the agent</td>
+</tr>
+<tr>
+<td><code>EvidencePackage</code></td>
+<td>dataclass</td>
+<td>Final response: original/rewritten/context/evidence/confidence/gaps/trace</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragerrors"><code>rag.errors</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>IngestionError(reason, *, file_path, stage, cause=None)</code></td>
+<td>Raised by <code>ingest_uploaded_file</code>. <code>stage</code> ∈ {<code>validate</code>, <code>extract</code>, <code>chunk</code>, <code>embed</code>, <code>store</code>}. Carries <code>to_dict()</code> for clean JSON.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragconfig"><code>rag.config</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Config</code></td>
+<td>Frozen-ish dataclass holding all env-driven settings</td>
+</tr>
+<tr>
+<td><code>load_config()</code></td>
+<td>Reads env (with <code>python-dotenv</code> if present) and returns <code>Config</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragembeddings"><code>rag.embeddings</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>EmbeddingProvider</code> (abstract)</td>
+<td>Interface: <code>dim</code>, <code>model_name</code>, <code>embed(texts)</code>, <code>embed_one(text)</code></td>
+</tr>
+<tr>
+<td><code>SentenceTransformersProvider</code></td>
+<td>Local model via <code>sentence-transformers</code></td>
+</tr>
+<tr>
+<td><code>HttpEmbeddingProvider</code></td>
+<td>OpenAI-compatible <code>/embeddings</code> HTTP endpoint</td>
+</tr>
+<tr>
+<td><code>build_embedding_provider(cfg)</code></td>
+<td>Factory; returns the right impl based on <code>EMBEDDING_PROVIDER</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragvector"><code>rag.vector</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>QdrantStore(url, api_key, collection, vector_size)</code></td>
+<td>Wrapper over <code>QdrantClient</code></td>
+</tr>
+<tr>
+<td><code>.ensure_collection()</code></td>
+<td>Idempotent: creates collection + workspaceId index on first call</td>
+</tr>
+<tr>
+<td><code>.upsert_chunks(chunks, vectors, batch_size=64)</code></td>
+<td>Deterministic UUIDv5 IDs → re-ingest replaces</td>
+</tr>
+<tr>
+<td><code>.search(query_vector, top_k, workspace_id?)</code></td>
+<td>Cosine search, optional workspace filter</td>
+</tr>
+<tr>
+<td><code>.info()</code></td>
+<td>Collection point count + status</td>
+</tr>
+<tr>
+<td><code>_stable_uuid(key)</code></td>
+<td>Helper: UUIDv5 from string</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragingestionfile_loader"><code>rag.ingestion.file_loader</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>supported_exts()</code></td>
+<td>Runtime set of extensions actually loadable in this env</td>
+</tr>
+<tr>
+<td><code>SUPPORTED_EXTS</code></td>
+<td>Static superset (advertises what extras would unlock)</td>
+</tr>
+<tr>
+<td><code>is_supported(path)</code></td>
+<td>Bool gate used by walkers</td>
+</tr>
+<tr>
+<td><code>detect_file_type(path)</code></td>
+<td><code>'text' | 'markdown' | 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'html' | 'csv' | 'unknown'</code></td>
+</tr>
+<tr>
+<td><code>extract_text(path)</code></td>
+<td>Routing: txt/md → raw; pdf → markitdown if available else pypdf; rest → markitdown required</td>
+</tr>
+<tr>
+<td><code>load_files(root)</code></td>
+<td>Walks file or directory, yields <code>(path, text)</code> for supported files</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragingestionchunker"><code>rag.ingestion.chunker</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Section(title, body)</code></td>
+<td>Internal: a top-level section with optional heading</td>
+</tr>
+<tr>
+<td><code>split_into_sections(text)</code></td>
+<td>Splits on <code>#</code>, <code>##</code>, and <code>^N. Title$</code>. Subsections (<code>4.1</code>, <code>###</code>) stay inside parent.</td>
+</tr>
+<tr>
+<td><code>SectionChunk(text, section_title, section_index)</code></td>
+<td>Output of section-aware chunker</td>
+</tr>
+<tr>
+<td><code>chunk_with_sections(text, chunk_size, overlap)</code></td>
+<td>Section-aware chunker. Chunks never cross top-level boundaries. Heading is prepended to chunk text.</td>
+</tr>
+<tr>
+<td><code>chunk_text(text, chunk_size, overlap)</code></td>
+<td>Backwards-compatible flat list of chunk strings</td>
+</tr>
+<tr>
+<td><code>normalize(text)</code></td>
+<td>Whitespace collapse</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragingestionupload"><code>rag.ingestion.upload</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ingest_uploaded_file(input, *, config?, embedder?, store?, batch_size=32)</code></td>
+<td><strong>Main backend entry point</strong> for a single file. Stage-tagged errors, deterministic IDs.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragingestioningest_pipeline"><code>rag.ingestion.ingest_pipeline</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ingest_paths(paths, config, embedder, store, workspace_id?, user_id?, verbose=True)</code></td>
+<td>CLI helper: walks paths and calls <code>ingest_uploaded_file</code> per file. Continues on per-file failures and reports them in the summary.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragpipelinequery_cleaner"><code>rag.pipeline.query_cleaner</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>clean_query(raw)</code></td>
+<td>Whole rewriting pipeline → <code>CleanedQuery</code></td>
+</tr>
+<tr>
+<td><code>TYPO_MAP</code></td>
+<td>Static typo table (case-preserving fixer)</td>
+</tr>
+<tr>
+<td><code>_LEADIN_RE</code></td>
+<td>Lead-in stripper for "please/could you/…"</td>
+</tr>
+<tr>
+<td><code>_FILLER_PHRASE_PATTERNS</code></td>
+<td>Anywhere-strippers for "i'm curious", "tell me about", …</td>
+</tr>
+<tr>
+<td><code>_select_clauses(text)</code></td>
+<td>Drops comma-clauses with zero content terms</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragpipelineretriever"><code>rag.pipeline.retriever</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>retrieve(query, embedder, store, top_k, workspace_id?)</code></td>
+<td>Embed + Qdrant search → <code>list[RetrievedChunk]</code> sorted by score desc</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragpipelinededuper"><code>rag.pipeline.deduper</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dedupe(chunks)</code></td>
+<td>Drop chunkId / sourceId+index / exact-text duplicates, keep highest-scoring</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragpipelinereranker"><code>rag.pipeline.reranker</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>RerankedChunk(chunk, rerank_score, signals)</code></td>
+<td>Output of rerank with signal trail</td>
+</tr>
+<tr>
+<td><code>rerank(query, chunks, *, vector_weight=1.0, heading_weight=0.6, term_weight=0.05)</code></td>
+<td>Lexical rerank on top of vector score</td>
+</tr>
+<tr>
+<td><code>content_terms(text)</code></td>
+<td>Lowercased non-stopword tokens (used by reranker, compressor, evidence builder)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragpipelinecompressor"><code>rag.pipeline.compressor</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>split_sentences(text)</code></td>
+<td>Sentence boundary splitter</td>
+</tr>
+<tr>
+<td><code>compress(text, query, *, neighbor_radius=1, min_chars=60)</code></td>
+<td>Extractive compressor: keep sentences with query terms + neighbors. Falls back to full text if no match.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragpipelinebudget_manager"><code>rag.pipeline.budget_manager</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>estimate_tokens(text)</code></td>
+<td>Cheap proxy: <code>ceil(len/4)</code></td>
+</tr>
+<tr>
+<td><code>apply_token_budget(chunks, max_tokens, max_chunks)</code></td>
+<td>Greedy by score (kept for old callers/tests)</td>
+</tr>
+<tr>
+<td><code>select_with_mmr(reranked, max_tokens, max_chunks, *, lambda_=0.7)</code></td>
+<td>MMR-style relevance-vs-diversity selection. Used by <code>run_rag_tool</code>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragpipelineevidence_builder"><code>rag.pipeline.evidence_builder</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>build_evidence_package(*, original_query, rewritten_query, reranked, selected, retrieval_trace)</code></td>
+<td>Compresses each selected chunk → <code>ContextItem</code>, dumps audit trail → <code>EvidenceItem</code>, computes <code>confidence</code> and <code>coverage_gaps</code></td>
+</tr>
+<tr>
+<td><code>_confidence(reranked, coverage_ratio)</code></td>
+<td>Heuristic: <code>0.6×top_vector + 0.4×coverage_ratio</code> (+ small bump if heading boost was strong)</td>
+</tr>
+<tr>
+<td><code>_coverage_gaps(query, contexts)</code></td>
+<td>Query content terms not seen anywhere in pooled context text + section titles</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragpipelinerun"><code>rag.pipeline.run</code></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>run_rag_tool(input, *, config?, embedder?, store?)</code></td>
+<td><strong>Main query entry point.</strong> Wires the whole pipeline and adds <code>retrieval_trace</code> (counts, scores, compression chars, MMR strategy).</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ragcliingest"><code>rag.cli.ingest</code></h3>
+<p><code>python -m rag.cli.ingest &lt;path&gt; [&lt;path&gt; …] [--workspace-id WS] [--user-id U] [--quiet]</code>
+Pure argparse wrapper over <code>ingest_paths</code> → <code>ingest_uploaded_file</code> per file. Exit code 1 if any file failed.</p>
+<h3 id="ragcliquery"><code>rag.cli.query</code></h3>
+<p><code>python -m rag.cli.query "&lt;question&gt;" [--max-tokens 4000] [--max-chunks 8] [--debug]</code>
+Wraps <code>run_rag_tool</code>. Prints <code>EvidencePackage.to_dict()</code> as indented JSON.</p>
+<h3 id="ragapiapp-fastapi"><code>rag.api.app</code> (FastAPI)</h3>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /v1/health</code></td>
+<td>Liveness + Qdrant + embedding info. Always open.</td>
+</tr>
+<tr>
+<td><code>GET /v1/info</code></td>
+<td>Config snapshot, supported extensions, auth flag.</td>
+</tr>
+<tr>
+<td><code>POST /v1/ingest/upload</code></td>
+<td>Multipart file upload → calls <code>ingest_uploaded_file</code>.</td>
+</tr>
+<tr>
+<td><code>POST /v1/ingest/file</code></td>
+<td>JSON <code>{filePath, workspaceId, userId, …}</code> for shared-volume backends.</td>
+</tr>
+<tr>
+<td><code>POST /v1/query</code></td>
+<td>JSON <code>RagInput</code>-like body → returns <code>EvidencePackage</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Implementation details:
+- <code>lifespan</code> builds embedder + <code>QdrantStore</code> once per process. Resources held in module-level <code>_RESOURCES</code>.
+- <code>require_api_key</code> dependency activates only when <code>RAG_API_KEY</code> env is set; otherwise no-op (dev-friendly).
+- <code>IngestionError</code> exception handler returns 400 with <code>{status, reason, filePath, stage}</code>.
+- Multipart upload streams to a temp file in 1 MB chunks, honours <code>RAG_API_MAX_UPLOAD_MB</code>.
+- Auto OpenAPI docs at <code>/docs</code> and <code>/redoc</code>.</p>
+<h3 id="ragapiserver"><code>rag.api.server</code></h3>
+<p><code>python -m rag.api.server [--host H] [--port P] [--reload] [--workers N]</code>
+Uvicorn launcher. Equivalent: <code>uvicorn rag.api.app:app</code>.</p>
+<h3 id="uiapp-streamlit-test-harness-only"><code>ui.app</code> (Streamlit, test harness only)</h3>
+<p><code>streamlit run ui/app.py</code>
+Tabs: Upload (multi-file, auto-ingests through <code>ingest_uploaded_file</code>), Query
+(returns full <code>EvidencePackage</code> with compressed context + raw evidence trail +
+retrieval trace), Session log.</p>
+<hr />
+<h2 id="7-data-shapes">7. Data shapes</h2>
+<h3 id="ingestuploadinput"><code>IngestUploadInput</code></h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>{
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;filePath&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;/srv/uploads/abc.pdf&quot;</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;workspaceId&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;workspace_123&quot;</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;userId&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;user_123&quot;</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;sourceId&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;doc_existing_id&quot;</span>,<span style="color: #BBB">        </span><span style="color: #3D7B7B; font-style: italic">// optional</span>
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;sourceType&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;document&quot;</span>,<span style="color: #BBB">             </span><span style="color: #3D7B7B; font-style: italic">// optional, default &quot;document&quot;</span>
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;title&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;Pricing FAQ&quot;</span>,<span style="color: #BBB">               </span><span style="color: #3D7B7B; font-style: italic">// optional, defaults to filename</span>
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;url&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;s3://uploads/abc.pdf&quot;</span><span style="color: #BBB">         </span><span style="color: #3D7B7B; font-style: italic">// optional, defaults to abs path</span>
+}
+</code></pre></div>
+
+<h3 id="ingestionresult"><code>IngestionResult</code></h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>{
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;sourceId&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;file:abc123&quot;</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;workspaceId&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;workspace_123&quot;</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;title&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;abc.pdf&quot;</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;chunksCreated&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">12</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;qdrantCollection&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;betopia_rag_mvp&quot;</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;status&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;success&quot;</span>
+}
+</code></pre></div>
+
+<h3 id="ingestionerrorto_dict"><code>IngestionError.to_dict()</code></h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>{
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;status&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;error&quot;</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;reason&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;File not found or not a regular file: /x.md&quot;</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;filePath&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;/x.md&quot;</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;stage&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;validate&quot;</span>
+}
+</code></pre></div>
+
+<p>Stage values: <code>validate</code>, <code>extract</code>, <code>chunk</code>, <code>embed</code>, <code>store</code>.</p>
+<h3 id="raginput"><code>RagInput</code></h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>{
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;query&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;what is the system vision?&quot;</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;workspaceId&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;default&quot;</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;userId&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;api_user&quot;</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;maxTokens&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">4000</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;maxChunks&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">8</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;debug&quot;</span>:<span style="color: #BBB"> </span><span style="color: #008000; font-weight: bold">false</span>
+}
+</code></pre></div>
+
+<h3 id="evidencepackage"><code>EvidencePackage</code></h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>{
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;original_query&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;what is the sysem vision?&quot;</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;rewritten_query&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;what is the system vision&quot;</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;context_for_agent&quot;</span>:<span style="color: #BBB"> </span>[
+<span style="color: #BBB">    </span>{
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;sourceId&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;file:abc123&quot;</span>,
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;chunkId&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;file:abc123:5&quot;</span>,
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;title&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;design.pdf&quot;</span>,
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;url&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;/abs/path/design.pdf&quot;</span>,
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;sectionTitle&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;4. System Vision&quot;</span>,
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;text&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;The system collects data and routes it through retrieval...&quot;</span>,
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;score&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">0.94</span>
+<span style="color: #BBB">    </span>}
+<span style="color: #BBB">  </span>],
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;evidence&quot;</span>:<span style="color: #BBB"> </span>[
+<span style="color: #BBB">    </span>{
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;sourceId&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;file:abc123&quot;</span>,
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;sourceType&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;document&quot;</span>,
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;chunkId&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;file:abc123:5&quot;</span>,
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;title&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;design.pdf&quot;</span>,
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;url&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;/abs/path/design.pdf&quot;</span>,
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;text&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;(full chunk text, pre-compression)&quot;</span>,
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;score&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">0.78</span>,
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;rerankScore&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">0.94</span>,
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;sectionTitle&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;4. System Vision&quot;</span>,
+<span style="color: #BBB">      </span><span style="color: #008000; font-weight: bold">&quot;metadata&quot;</span>:<span style="color: #BBB"> </span>{
+<span style="color: #BBB">        </span><span style="color: #008000; font-weight: bold">&quot;chunkIndex&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">5</span>,<span style="color: #BBB"> </span><span style="color: #008000; font-weight: bold">&quot;filePath&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;...&quot;</span>,<span style="color: #BBB"> </span><span style="color: #008000; font-weight: bold">&quot;fileType&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;pdf&quot;</span>,
+<span style="color: #BBB">        </span><span style="color: #008000; font-weight: bold">&quot;sectionTitle&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;4. System Vision&quot;</span>,<span style="color: #BBB"> </span><span style="color: #008000; font-weight: bold">&quot;sectionIndex&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">3</span>,
+<span style="color: #BBB">        </span><span style="color: #008000; font-weight: bold">&quot;rerankSignals&quot;</span>:<span style="color: #BBB"> </span>{<span style="color: #008000; font-weight: bold">&quot;vectorScore&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">0.78</span>,<span style="color: #BBB"> </span><span style="color: #008000; font-weight: bold">&quot;headingOverlap&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">2</span>,<span style="color: #BBB"> </span><span style="color: #008000; font-weight: bold">&quot;termOverlap&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">3</span>}
+<span style="color: #BBB">      </span>}
+<span style="color: #BBB">    </span>}
+<span style="color: #BBB">  </span>],
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;confidence&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">0.83</span>,
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;coverage_gaps&quot;</span>:<span style="color: #BBB"> </span>[],
+<span style="color: #BBB">  </span><span style="color: #008000; font-weight: bold">&quot;retrieval_trace&quot;</span>:<span style="color: #BBB"> </span>{
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;rewrittenQuery&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;what is the system vision&quot;</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;retrievedCount&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">20</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;duplicatesDropped&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">6</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;dedupedCount&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">14</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;rerankedCount&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">14</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;selectedCount&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">4</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;selectionStrategy&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;mmr&quot;</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;mmrLambda&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">0.7</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;preCompressionChars&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">6312</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;postCompressionChars&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">1840</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;compressionRatio&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">0.2916</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;estimatedTokensPreCompression&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">1580</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;estimatedTokensPostCompression&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">460</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;maxTokens&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">4000</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;maxChunks&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">8</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;topVectorScore&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">0.78</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;topRerankScore&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">0.94</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;topSectionTitle&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;4. System Vision&quot;</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;embeddingModel&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;BAAI/bge-m3&quot;</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;vectorDim&quot;</span>:<span style="color: #BBB"> </span><span style="color: #666">1024</span>,
+<span style="color: #BBB">    </span><span style="color: #008000; font-weight: bold">&quot;qdrantCollection&quot;</span>:<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;betopia_rag_mvp&quot;</span>
+<span style="color: #BBB">  </span>}
+}
+</code></pre></div>
+
+<hr />
+<h2 id="8-configuration-env-vars">8. Configuration (env vars)</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>QDRANT_URL</code></td>
+<td><code>http://localhost:6333</code></td>
+<td>Qdrant endpoint</td>
+</tr>
+<tr>
+<td><code>QDRANT_API_KEY</code></td>
+<td>empty</td>
+<td>Qdrant Cloud key</td>
+</tr>
+<tr>
+<td><code>QDRANT_COLLECTION</code></td>
+<td><code>betopia_rag_mvp</code></td>
+<td>Collection name</td>
+</tr>
+<tr>
+<td><code>EMBEDDING_PROVIDER</code></td>
+<td><code>sentence-transformers</code></td>
+<td>Or <code>http</code></td>
+</tr>
+<tr>
+<td><code>EMBEDDING_MODEL</code></td>
+<td><code>BAAI/bge-m3</code></td>
+<td>Or <code>jina-embeddings-v3</code>, OpenAI model name, etc.</td>
+</tr>
+<tr>
+<td><code>EMBEDDING_API_KEY</code></td>
+<td>empty</td>
+<td>For <code>http</code> provider</td>
+</tr>
+<tr>
+<td><code>EMBEDDING_BASE_URL</code></td>
+<td>empty</td>
+<td>For <code>http</code> provider (<code>https://api.jina.ai/v1</code>, …)</td>
+</tr>
+<tr>
+<td><code>EMBEDDING_DIM</code></td>
+<td><code>1024</code></td>
+<td>Must match the model. <strong>Cannot change after the collection exists.</strong></td>
+</tr>
+<tr>
+<td><code>RAG_WORKSPACE_ID</code></td>
+<td><code>default</code></td>
+<td>Default workspace for multi-tenant filtering</td>
+</tr>
+<tr>
+<td><code>RAG_RETRIEVE_TOP_K</code></td>
+<td><code>20</code></td>
+<td>Vectors fetched from Qdrant</td>
+</tr>
+<tr>
+<td><code>RAG_FINAL_MAX_CHUNKS</code></td>
+<td><code>8</code></td>
+<td>Default max chunks returned to agent</td>
+</tr>
+<tr>
+<td><code>RAG_MAX_TOKENS</code></td>
+<td><code>4000</code></td>
+<td>Default token budget for selection</td>
+</tr>
+<tr>
+<td><code>RAG_CHUNK_SIZE</code></td>
+<td><code>600</code></td>
+<td>Words per chunk</td>
+</tr>
+<tr>
+<td><code>RAG_CHUNK_OVERLAP</code></td>
+<td><code>100</code></td>
+<td>Word overlap between chunks</td>
+</tr>
+<tr>
+<td><code>RAG_API_HOST</code></td>
+<td><code>0.0.0.0</code></td>
+<td>API bind</td>
+</tr>
+<tr>
+<td><code>RAG_API_PORT</code></td>
+<td><code>8080</code></td>
+<td>API port</td>
+</tr>
+<tr>
+<td><code>RAG_API_KEY</code></td>
+<td>empty</td>
+<td>When set, requires <code>X-API-Key: …</code> on every non-health request</td>
+</tr>
+<tr>
+<td><code>RAG_API_CORS_ORIGINS</code></td>
+<td><code>*</code></td>
+<td>Comma-separated origins or <code>*</code></td>
+</tr>
+<tr>
+<td><code>RAG_API_MAX_UPLOAD_MB</code></td>
+<td><code>50</code></td>
+<td>Multipart upload cap</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="9-integration-surfaces">9. Integration surfaces</h2>
+<h3 id="cli">CLI</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code><span style="color: #3D7B7B; font-style: italic"># Ingest a file or directory</span>
+python<span style="color: #BBB"> </span>-m<span style="color: #BBB"> </span>rag.cli.ingest<span style="color: #BBB"> </span>./data/docs
+
+<span style="color: #3D7B7B; font-style: italic"># Query</span>
+python<span style="color: #BBB"> </span>-m<span style="color: #BBB"> </span>rag.cli.query<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;what is the system vision?&quot;</span><span style="color: #BBB"> </span>--debug
+</code></pre></div>
+
+<h3 id="rest-api">REST API</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code><span style="color: #3D7B7B; font-style: italic"># Start server</span>
+python<span style="color: #BBB"> </span>-m<span style="color: #BBB"> </span>rag.api.server
+
+<span style="color: #3D7B7B; font-style: italic"># Ingest from a path the RAG service can read</span>
+curl<span style="color: #BBB"> </span>-X<span style="color: #BBB"> </span>POST<span style="color: #BBB"> </span>http://localhost:8080/v1/ingest/file<span style="color: #BBB"> </span><span style="color: #AA5D1F; font-weight: bold">\</span>
+<span style="color: #BBB">  </span>-H<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;Content-Type: application/json&quot;</span><span style="color: #BBB"> </span><span style="color: #AA5D1F; font-weight: bold">\</span>
+<span style="color: #BBB">  </span>-H<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;X-API-Key: </span><span style="color: #19177C">$RAG_API_KEY</span><span style="color: #BA2121">&quot;</span><span style="color: #BBB"> </span><span style="color: #AA5D1F; font-weight: bold">\</span>
+<span style="color: #BBB">  </span>-d<span style="color: #BBB"> </span><span style="color: #BA2121">&#39;{&quot;filePath&quot;:&quot;/srv/uploads/x.pdf&quot;,&quot;workspaceId&quot;:&quot;ws1&quot;,&quot;userId&quot;:&quot;u1&quot;}&#39;</span>
+
+<span style="color: #3D7B7B; font-style: italic"># Multipart upload</span>
+curl<span style="color: #BBB"> </span>-X<span style="color: #BBB"> </span>POST<span style="color: #BBB"> </span>http://localhost:8080/v1/ingest/upload<span style="color: #BBB"> </span><span style="color: #AA5D1F; font-weight: bold">\</span>
+<span style="color: #BBB">  </span>-H<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;X-API-Key: </span><span style="color: #19177C">$RAG_API_KEY</span><span style="color: #BA2121">&quot;</span><span style="color: #BBB"> </span><span style="color: #AA5D1F; font-weight: bold">\</span>
+<span style="color: #BBB">  </span>-F<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;file=@./design.pdf&quot;</span><span style="color: #BBB"> </span>-F<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;workspaceId=ws1&quot;</span><span style="color: #BBB"> </span>-F<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;userId=u1&quot;</span>
+
+<span style="color: #3D7B7B; font-style: italic"># Query</span>
+curl<span style="color: #BBB"> </span>-X<span style="color: #BBB"> </span>POST<span style="color: #BBB"> </span>http://localhost:8080/v1/query<span style="color: #BBB"> </span><span style="color: #AA5D1F; font-weight: bold">\</span>
+<span style="color: #BBB">  </span>-H<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;Content-Type: application/json&quot;</span><span style="color: #BBB"> </span><span style="color: #AA5D1F; font-weight: bold">\</span>
+<span style="color: #BBB">  </span>-H<span style="color: #BBB"> </span><span style="color: #BA2121">&quot;X-API-Key: </span><span style="color: #19177C">$RAG_API_KEY</span><span style="color: #BA2121">&quot;</span><span style="color: #BBB"> </span><span style="color: #AA5D1F; font-weight: bold">\</span>
+<span style="color: #BBB">  </span>-d<span style="color: #BBB"> </span><span style="color: #BA2121">&#39;{&quot;query&quot;:&quot;what is the system vision?&quot;,&quot;workspaceId&quot;:&quot;ws1&quot;,&quot;maxChunks&quot;:6}&#39;</span>
+</code></pre></div>
+
+<h3 id="streamlit-ui-test-only">Streamlit UI (test only)</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>streamlit<span style="color: #BBB"> </span>run<span style="color: #BBB"> </span>ui/app.py
+</code></pre></div>
+
+<h3 id="in-process-python-recommended-for-backend-monoliths">In-process Python (recommended for backend monoliths)</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code><span style="color: #008000; font-weight: bold">from</span><span style="color: #BBB"> </span><span style="color: #00F; font-weight: bold">rag</span><span style="color: #BBB"> </span><span style="color: #008000; font-weight: bold">import</span> (
+    ingest_uploaded_file,
+    run_rag_tool,
+    IngestUploadInput,
+    RagInput,
+    IngestionError,
+)
+<span style="color: #008000; font-weight: bold">from</span><span style="color: #BBB"> </span><span style="color: #00F; font-weight: bold">rag.config</span><span style="color: #BBB"> </span><span style="color: #008000; font-weight: bold">import</span> load_config
+<span style="color: #008000; font-weight: bold">from</span><span style="color: #BBB"> </span><span style="color: #00F; font-weight: bold">rag.embeddings.default_provider</span><span style="color: #BBB"> </span><span style="color: #008000; font-weight: bold">import</span> build_embedding_provider
+<span style="color: #008000; font-weight: bold">from</span><span style="color: #BBB"> </span><span style="color: #00F; font-weight: bold">rag.vector.qdrant_client</span><span style="color: #BBB"> </span><span style="color: #008000; font-weight: bold">import</span> QdrantStore
+
+<span style="color: #3D7B7B; font-style: italic"># Build resources once per backend process.</span>
+cfg <span style="color: #666">=</span> load_config()
+embedder <span style="color: #666">=</span> build_embedding_provider(cfg)
+store <span style="color: #666">=</span> QdrantStore(cfg<span style="color: #666">.</span>qdrant_url, cfg<span style="color: #666">.</span>qdrant_api_key, cfg<span style="color: #666">.</span>qdrant_collection, embedder<span style="color: #666">.</span>dim)
+
+<span style="color: #3D7B7B; font-style: italic"># Ingest:</span>
+<span style="color: #008000; font-weight: bold">try</span>:
+    result <span style="color: #666">=</span> ingest_uploaded_file(
+        IngestUploadInput(file_path<span style="color: #666">=</span>path, workspace_id<span style="color: #666">=</span>ws, user_id<span style="color: #666">=</span>uid),
+        config<span style="color: #666">=</span>cfg, embedder<span style="color: #666">=</span>embedder, store<span style="color: #666">=</span>store,
+    )
+<span style="color: #008000; font-weight: bold">except</span> IngestionError <span style="color: #008000; font-weight: bold">as</span> e:
+    log<span style="color: #666">.</span>warning(<span style="color: #BA2121">&quot;ingest failed: </span><span style="color: #A45A77; font-weight: bold">%s</span><span style="color: #BA2121">&quot;</span>, e<span style="color: #666">.</span>to_dict())
+
+<span style="color: #3D7B7B; font-style: italic"># Query:</span>
+pkg <span style="color: #666">=</span> run_rag_tool(
+    RagInput(query<span style="color: #666">=</span>q, workspace_id<span style="color: #666">=</span>ws, user_id<span style="color: #666">=</span>uid, max_chunks<span style="color: #666">=8</span>),
+    config<span style="color: #666">=</span>cfg, embedder<span style="color: #666">=</span>embedder, store<span style="color: #666">=</span>store,
+)
+context_for_agent <span style="color: #666">=</span> pkg<span style="color: #666">.</span>to_dict()[<span style="color: #BA2121">&quot;context_for_agent&quot;</span>]
+</code></pre></div>
+
+<hr />
+<h2 id="10-testing-map">10. Testing map</h2>
+<p>All tests are hermetic — no real Qdrant, no embedding-model downloads.</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Covers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tests/test_chunker.py</code></td>
+<td>Section detection, no-cross-section guarantee, normalize, invalid overlap</td>
+</tr>
+<tr>
+<td><code>tests/test_query_cleaner.py</code></td>
+<td>Typo fix, lead-in strip, filler phrases, comma-clause filtering, empty-fallback</td>
+</tr>
+<tr>
+<td><code>tests/test_reranker.py</code></td>
+<td>Heading boost beats higher vector score, term overlap tie-break, signal recording</td>
+</tr>
+<tr>
+<td><code>tests/test_compressor.py</code></td>
+<td>Sentence split, query-relevant retention, neighbor expansion, fallback when no hit</td>
+</tr>
+<tr>
+<td><code>tests/test_budget_manager.py</code></td>
+<td><code>apply_token_budget</code> greedy, MMR diversity, λ=1.0 reduces to greedy, budget caps</td>
+</tr>
+<tr>
+<td><code>tests/test_deduper.py</code></td>
+<td>All three dedup rules + highest-score wins</td>
+</tr>
+<tr>
+<td><code>tests/test_evidence_builder.py</code></td>
+<td>New shape keys, compression in <code>context_for_agent</code>, coverage gaps, zero-confidence path</td>
+</tr>
+<tr>
+<td><code>tests/test_file_loader.py</code></td>
+<td>Type detection, plain-text path, markitdown HTML+CSV, clear error when DOCX without extra</td>
+</tr>
+<tr>
+<td><code>tests/test_upload.py</code></td>
+<td>Happy path, optional override precedence, all five <code>IngestionError.stage</code> values</td>
+</tr>
+<tr>
+<td><code>tests/test_api.py</code></td>
+<td>Health/info, optional auth, ingest endpoints (file + multipart), size limit, query shape</td>
+</tr>
+</tbody>
+</table>
+<p>Run all:</p>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>pytest<span style="color: #BBB"> </span>-q
+</code></pre></div>
+
+<p>Smoke run against a real local Qdrant with a fake embedder (model-free):</p>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>python<span style="color: #BBB"> </span>scripts/smoke_test.py
+</code></pre></div>
+
+<hr />
+<h2 id="11-tuning-knobs">11. Tuning knobs</h2>
+<table>
+<thead>
+<tr>
+<th>Knob</th>
+<th>Where</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>RAG_CHUNK_SIZE</code> / <code>RAG_CHUNK_OVERLAP</code></td>
+<td>env</td>
+<td>Larger chunks → better context but coarser retrieval. Defaults (600/100) are a good starting point for medium-length docs.</td>
+</tr>
+<tr>
+<td><code>RAG_RETRIEVE_TOP_K</code></td>
+<td>env</td>
+<td>Number of candidates fetched from Qdrant. Increase to give rerank/MMR more to work with.</td>
+</tr>
+<tr>
+<td><code>heading_weight</code> (default 0.6)</td>
+<td><code>rerank()</code> arg</td>
+<td>How strongly section-title matches override vector similarity.</td>
+</tr>
+<tr>
+<td><code>term_weight</code> (default 0.05)</td>
+<td><code>rerank()</code> arg</td>
+<td>Linear bonus per query term present in the chunk. Keep small to avoid keyword stuffing.</td>
+</tr>
+<tr>
+<td><code>lambda_</code> (default 0.7)</td>
+<td><code>select_with_mmr()</code> arg</td>
+<td>1.0 = greedy by relevance. 0.0 = pure diversity. 0.7 leans relevance with real diversity nudge.</td>
+</tr>
+<tr>
+<td><code>neighbor_radius</code> (default 1)</td>
+<td><code>compress()</code> arg</td>
+<td>How many neighbor sentences each hit drags in. Increase for more context per hit.</td>
+</tr>
+<tr>
+<td><code>min_chars</code> (default 60)</td>
+<td><code>compress()</code> arg</td>
+<td>Floor below which the compressor returns the full chunk (avoids over-trimming).</td>
+</tr>
+<tr>
+<td><code>EMBEDDING_MODEL</code></td>
+<td>env</td>
+<td>Quality vs cost. BGE-M3 (1024-d) is the best free open model in mid-2024. Jina v3 also strong.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="12-what-is-intentionally-not-in-the-mvp">12. What is intentionally NOT in the MVP</h2>
+<ul>
+<li>Postgres / SQL document store (Qdrant payloads carry chunk text instead)</li>
+<li>Elasticsearch / Meilisearch / BM25 hybrid retrieval</li>
+<li>Cross-encoder / Cohere / LLM-based reranker</li>
+<li>LLM-based query rewriting or summarisation</li>
+<li>MCP server</li>
+<li>Final natural-language answer generation (the outer agent does this)</li>
+<li>Streaming / async pipelines</li>
+<li>Multi-tenant auth, rate limiting, distributed tracing</li>
+</ul>
+<hr />
+<h2 id="13-upgrade-path-to-production">13. Upgrade path to production</h2>
+<p>When the MVP graduates, the most likely upgrades are:</p>
+<ol>
+<li><strong>Hybrid retrieval.</strong> Add BM25 (Elasticsearch / Meilisearch / Qdrant native
+   sparse vectors) and fuse with the dense top-K via Reciprocal Rank Fusion.</li>
+<li><strong>Cross-encoder rerank.</strong> Replace lexical rerank with a small CE model
+   (<code>bge-reranker-v2</code>, <code>Cohere rerank-english-v3.0</code>) for a notable bump in
+   precision-at-K.</li>
+<li><strong>LLM compression.</strong> Replace the extractive <code>compress()</code> with a map-reduce
+   summariser when chunks are very long or the query is complex.</li>
+<li><strong>Postgres metadata store.</strong> Track <code>documents</code>, <code>users</code>, <code>workspaces</code>,
+   ingestion job history alongside Qdrant.</li>
+<li><strong>Streaming answer generation in the outer agent.</strong> RAG response stays
+   non-streaming; the agent streams.</li>
+<li><strong>Observability.</strong> Wire OpenTelemetry around the <code>retrieval_trace</code> we
+   already build.</li>
+<li><strong>Per-tenant isolation.</strong> Distinct collections or strict workspace-id
+   filters at the gateway.</li>
+</ol>
+<p>The internal interfaces (<code>EmbeddingProvider</code>, <code>QdrantStore</code>, the pipeline
+stages, <code>EvidencePackage</code>) are designed so each of these is a swap-in change,
+not a rewrite.</p>
+</body>
+</html>

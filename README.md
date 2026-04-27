@@ -1,5 +1,11 @@
 # Betopia RAG MVP
 
+> **Full developer guide:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+> ([printable HTML](docs/ARCHITECTURE.html))
+> — covers every function, execution order, data shapes, integration patterns,
+> tuning knobs, and upgrade path.
+
+
 Minimal CLI-based RAG system. Returns an `EvidencePackage` that an outer agent
 consumes — the RAG layer does **not** generate the final natural-language answer.
 
@@ -305,6 +311,107 @@ pip install -e .[markitdown]
 ```
 
 Anything else raises `IngestionError(stage="validate")`.
+
+## Backend API (FastAPI)
+
+REST wrapper around the same `ingest_uploaded_file` + `run_rag_tool` the
+CLI/UI use. Backend services can integrate either by HTTP (separate
+process/container) or by importing the modules in-process — both produce
+the same JSON shapes.
+
+Install + run:
+
+```bash
+pip install -e .[api,markitdown,local-embeddings]
+python -m rag.api.server
+# or:  uvicorn rag.api.app:app --host 0.0.0.0 --port 8080
+# or:  rag-api --host 0.0.0.0 --port 8080
+```
+
+OpenAPI docs auto-generated at `http://localhost:8080/docs` and
+`http://localhost:8080/redoc`.
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET  | `/v1/health` | Liveness + Qdrant + embedding info. **Always open** so load balancers can probe. |
+| GET  | `/v1/info` | Config snapshot, supported extensions, auth flag. |
+| POST | `/v1/ingest/upload` | Multipart file upload → auto-ingest → `IngestionResult`. |
+| POST | `/v1/ingest/file` | JSON `{filePath, workspaceId, userId, ...}` → ingests a file already on the RAG service's filesystem. |
+| POST | `/v1/query` | JSON query → `EvidencePackage`. Same shape as `run_rag_tool`. |
+
+### Auth
+
+Set `RAG_API_KEY` in env. Then every request to ingest/query/info must
+send `X-API-Key: <value>`. `/v1/health` stays open. Unset = no auth (dev only).
+
+### CORS
+
+`RAG_API_CORS_ORIGINS=*` (default) or comma-separated list.
+
+### Curl examples
+
+Health:
+```bash
+curl http://localhost:8080/v1/health
+```
+
+Ingest from a path the RAG service can read:
+```bash
+curl -X POST http://localhost:8080/v1/ingest/file \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $RAG_API_KEY" \
+  -d '{
+        "filePath": "/srv/uploads/design.pdf",
+        "workspaceId": "workspace_123",
+        "userId": "user_123"
+      }'
+```
+
+Multipart upload:
+```bash
+curl -X POST http://localhost:8080/v1/ingest/upload \
+  -H "X-API-Key: $RAG_API_KEY" \
+  -F "file=@./design.pdf" \
+  -F "workspaceId=workspace_123" \
+  -F "userId=user_123"
+```
+
+Query:
+```bash
+curl -X POST http://localhost:8080/v1/query \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $RAG_API_KEY" \
+  -d '{
+        "query": "what is the system vision?",
+        "workspaceId": "workspace_123",
+        "maxChunks": 6
+      }'
+```
+
+### Backend integration patterns
+
+**HTTP** (RAG runs as separate service):
+```ts
+const res = await fetch(`${RAG_URL}/v1/query`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "X-API-Key": process.env.RAG_API_KEY!,
+  },
+  body: JSON.stringify({ query, workspaceId, userId, maxChunks: 8 }),
+});
+const evidencePackage = await res.json();
+```
+
+**In-process** (RAG imported into backend):
+```python
+from rag import run_rag_tool, ingest_uploaded_file
+pkg = run_rag_tool({"query": q, "workspaceId": ws, "userId": uid})
+```
+
+Identical JSON returned either way.
 
 ## Test UI (Streamlit)
 
