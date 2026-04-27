@@ -25,7 +25,7 @@ from rag.types import CleanedQuery
 _WS_RE = re.compile(r"\s+")
 _LEADIN_RE = re.compile(
     r"^(?:please\s+|kindly\s+|could\s+you\s+|can\s+you\s+|would\s+you\s+|"
-    r"hey\s+claude\s+|hi\s+|hello\s+)+",
+    r"hey\s+claude\s+)+",
     re.IGNORECASE,
 )
 _TRAILING_PUNCT_RE = re.compile(r"[\s\?!.]+$")
@@ -227,6 +227,12 @@ def clean_query(raw: str) -> CleanedQuery:
     stripped = _TRAILING_PUNCT_RE.sub("", rewritten).strip()
     if stripped:
         rewritten = stripped
+
+    # Safety net: if all the trimming reduced the query to empty (e.g. user
+    # typed only filler like "im curious"), fall back to the cleaned form so
+    # the retriever still has something to embed.
+    if not rewritten:
+        rewritten = cleaned
 
     return CleanedQuery(
         original_query=original,

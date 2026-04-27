@@ -11,7 +11,12 @@ def test_trim_whitespace():
 def test_strip_lead_in():
     out = clean_query("Please could you tell me what RAG is?")
     assert out.cleaned_query == "Please could you tell me what RAG is?"
-    assert out.rewritten_query == "tell me what RAG is"
+    # New behavior: "tell me" is stripped as filler, so the rewrite collapses
+    # to the topical core.
+    assert "RAG" in out.rewritten_query
+    assert "tell me" not in out.rewritten_query.lower()
+    assert "could you" not in out.rewritten_query.lower()
+    assert "please" not in out.rewritten_query.lower()
 
 
 def test_preserves_technical_terms():
