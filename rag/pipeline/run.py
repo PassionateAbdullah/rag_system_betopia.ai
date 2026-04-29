@@ -102,15 +102,11 @@ def run_rag_tool(
         search_plan.use_keyword = False
     timings["sourceRouting"] = (time.perf_counter() - t0) * 1000.0
 
-    # Filter to only routes the plan actually targets.
+    # NOTE: routes drive *which backends* we hit; they are NOT a hard
+    # filter on stored sourceType. Stored values may be singular
+    # ("document"), router routes are plural ("documents"). Only apply a
+    # source_type filter when the *caller* explicitly passed one.
     effective_filters = rag_input.filters
-    if search_plan.routes:
-        if not effective_filters.source_types:
-            from rag.types import FilterSpec
-            effective_filters = FilterSpec(
-                source_types=search_plan.routes,
-                document_ids=list(rag_input.filters.document_ids),
-            )
 
     # ---------- 4. hybrid retrieval ----------
     t0 = time.perf_counter()

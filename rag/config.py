@@ -110,6 +110,16 @@ class Config:
     neighbor_chunk_window: int = 1
     include_parent_section: bool = True
 
+    # PDF loader: "auto" (default — markitdown if installed, else pypdf),
+    # "pypdf" (force fast path — recommended for large/scanned-free PDFs),
+    # "markitdown" (force markitdown — best heading preservation, slow).
+    pdf_loader: str = "auto"
+
+    # Chunker: "word" (default — fixed window, deterministic, no embed cost),
+    # "semantic" (sentence-embed, cosine-drop boundaries, recall ↑),
+    # "hierarchical" (small child for retrieval + big parent context).
+    chunker: str = "word"
+
 
 def load_config() -> Config:
     return Config(
@@ -162,4 +172,6 @@ def load_config() -> Config:
         eval_log_path=_env_str("EVAL_LOG_PATH", "logs/eval.jsonl"),
         neighbor_chunk_window=_env_int("NEIGHBOR_CHUNK_WINDOW", 1),
         include_parent_section=_env_bool("INCLUDE_PARENT_SECTION", True),
+        pdf_loader=_env_str("PDF_LOADER", "auto").lower(),
+        chunker=_env_str("CHUNKER", "word").lower(),
     )
