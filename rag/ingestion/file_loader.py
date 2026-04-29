@@ -78,18 +78,31 @@ def is_supported(path: str) -> bool:
     return ext in supported_exts()
 
 
-def extract_text(path: str) -> str:
+def extract_text(path: str, *, pdf_loader: str = "auto") -> str:
     """Extract text/markdown from a single file.
 
     Routing:
       - .txt/.md/.markdown -> read raw
-      - .pdf               -> markitdown if available, else pypdf
+      - .pdf               -> markitdown if available + pdf_loader != "pypdf",
+                              else pypdf. Set PDF_LOADER=pypdf for big/long
+                              books — markitdown can take many minutes on them.
       - .docx/.xlsx/.pptx/.html/.csv -> markitdown (required)
     """
     ftype = detect_file_type(path)
     if ftype in ("text", "markdown"):
         return _read_text(path)
     if ftype == "pdf":
+        loader = (pdf_loader or "auto").lower()
+        if loader == "pypdf":
+            return _read_pdf_with_pypdf(path)
+        if loader == "markitdown":
+            if not _markitdown_available():
+                raise RuntimeError(
+                    "PDF_LOADER=markitdown but markitdown is not installed. "
+                    "Install with: pip install -e .[markitdown]"
+                )
+            return _read_with_markitdown(path)
+        # auto
         if _markitdown_available():
             return _read_with_markitdown(path)
         return _read_pdf_with_pypdf(path)

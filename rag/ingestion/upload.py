@@ -23,6 +23,8 @@ from rag.embeddings.default_provider import build_embedding_provider
 from rag.errors import IngestionError
 from rag.ingestion.chunker import chunk_with_sections
 from rag.ingestion.file_loader import detect_file_type, extract_text, is_supported
+from rag.ingestion.hierarchical_chunker import chunk_with_sections_hierarchical
+from rag.ingestion.semantic_chunker import chunk_with_sections_semantic
 from rag.storage import build_postgres_store
 from rag.types import Chunk, IngestionResult, IngestUploadInput
 from rag.vector.qdrant_client import QdrantStore
@@ -42,7 +44,7 @@ def ingest_uploaded_file(
     embedder: EmbeddingProvider | None = None,
     store: QdrantStore | None = None,
     postgres: PostgresStore | None = None,
-    batch_size: int = 32,
+    batch_size: int = 128,
 ) -> IngestionResult:
     payload = (
         input_data
@@ -77,7 +79,7 @@ def ingest_uploaded_file(
 
     # --- stage: extract ---
     try:
-        raw_text = extract_text(abs_path)
+        raw_text = extract_text(abs_path, pdf_loader=cfg.pdf_loader)
     except IngestionError:
         raise
     except Exception as e:
@@ -95,13 +97,22 @@ def ingest_uploaded_file(
             stage="extract",
         )
 
+    # Build embedder/store lazily so callers without a workload don't pay setup.
+    emb = embedder or build_embedding_provider(cfg)
+
     # --- stage: chunk ---
     try:
-        section_chunks = chunk_with_sections(
-            raw_text,
-            chunk_size=cfg.chunk_size,
-            overlap=cfg.chunk_overlap,
-        )
+        chunker_kind = (cfg.chunker or "word").lower()
+        if chunker_kind == "semantic":
+            section_chunks = chunk_with_sections_semantic(raw_text, emb)
+        elif chunker_kind == "hierarchical":
+            section_chunks = chunk_with_sections_hierarchical(raw_text)
+        else:
+            section_chunks = chunk_with_sections(
+                raw_text,
+                chunk_size=cfg.chunk_size,
+                overlap=cfg.chunk_overlap,
+            )
     except Exception as e:
         raise IngestionError(
             f"Chunking failed: {e}",
@@ -140,8 +151,6 @@ def ingest_uploaded_file(
             )
         )
 
-    # Build embedder/store lazily so callers without a workload don't pay setup.
-    emb = embedder or build_embedding_provider(cfg)
     s = store or QdrantStore(
         url=cfg.qdrant_url,
         api_key=cfg.qdrant_api_key,
