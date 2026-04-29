@@ -29,6 +29,7 @@ from rag.errors import IngestionError
 from rag.ingestion.file_loader import supported_exts
 from rag.ingestion.upload import ingest_uploaded_file
 from rag.pipeline.run import run_rag_tool
+from rag.storage import build_postgres_store
 from rag.types import IngestUploadInput, RagInput
 from rag.vector.qdrant_client import QdrantStore
 
@@ -48,7 +49,14 @@ def get_resources() -> dict[str, Any]:
         vector_size=embedder.dim,
     )
     store.ensure_collection()
-    return {"cfg": cfg, "embedder": embedder, "store": store}
+    pg = None
+    try:
+        pg = build_postgres_store(cfg)
+        if pg is not None:
+            pg.migrate()
+    except Exception:
+        pg = None
+    return {"cfg": cfg, "embedder": embedder, "store": store, "postgres": pg}
 
 
 def _qdrant_status(store: QdrantStore) -> dict[str, Any]:
@@ -89,6 +97,26 @@ with st.sidebar:
         f"collection: {cfg.qdrant_collection}\n"
         f"points:     {info.get('vectors_count', '?')}\n"
         f"status:     {info.get('status', '?')}",
+        language="text",
+    )
+    pg = res.get("postgres")
+    st.subheader("Postgres")
+    if pg is None:
+        st.code("disabled (POSTGRES_URL unset) — Qdrant-only mode", language="text")
+    else:
+        pg_info = pg.info()
+        st.code(
+            f"documents: {pg_info.get('documents', '?')}\n"
+            f"chunks:    {pg_info.get('chunks', '?')}\n"
+            f"status:    {'ok' if pg_info.get('ok') else 'error'}",
+            language="text",
+        )
+    st.subheader("Pipeline")
+    st.code(
+        f"reranker:    {cfg.reranker_provider}\n"
+        f"compression: {cfg.compression_provider}\n"
+        f"hybrid:      {bool(pg is not None and cfg.enable_hybrid_retrieval)}\n"
+        f"rewriter:    {cfg.query_rewriter}",
         language="text",
     )
     st.subheader("Embedding")
@@ -157,6 +185,7 @@ with tab_upload:
                         config=res["cfg"],
                         embedder=res["embedder"],
                         store=res["store"],
+                        postgres=res.get("postgres"),
                     )
                     elapsed_ms = int((time.time() - started) * 1000)
                     payload = result.to_dict()
@@ -238,6 +267,7 @@ with tab_query:
                 config=res["cfg"],
                 embedder=res["embedder"],
                 store=res["store"],
+                postgres=res.get("postgres"),
             )
             elapsed_ms = int((time.time() - started) * 1000)
             out = pkg.to_dict()
@@ -248,8 +278,11 @@ with tab_query:
 
             n_evidence = len(out["evidence"])
             n_context = len(out["context_for_agent"])
+            n_citations = len(out.get("citations") or [])
             confidence = out.get("confidence", 0.0)
             gaps = out.get("coverage_gaps", []) or []
+            usage = out.get("usage") or {}
+            debug_payload = out.get("debug") or {}
 
             with st.chat_message("user", avatar="🧑"):
                 st.write(query_text)
@@ -268,7 +301,13 @@ with tab_query:
                 msg += (
                     f"- context items for agent: **{n_context}**\n"
                     f"- raw evidence chunks: **{n_evidence}**\n"
+                    f"- citations: **{n_citations}**\n"
                 )
+                if usage:
+                    msg += (
+                        f"- estimated tokens: **{usage.get('estimatedTokens', '?')}**"
+                        f" / {usage.get('maxTokens', '?')}\n"
+                    )
                 if gaps:
                     msg += f"- coverage gaps: **{len(gaps)}**\n"
                 st.markdown(msg)
@@ -313,9 +352,28 @@ with tab_query:
                         st.caption(f"signals: {sigs}")
                     st.divider()
 
+            # --- citations (the agent renders these next to its answer) ---
+            if n_citations:
+                with st.expander(f"Citations ({n_citations})", expanded=False):
+                    for i, cit in enumerate(out["citations"]):
+                        section = cit.get("section") or "(no section)"
+                        page = cit.get("page")
+                        page_str = f" · page {page}" if page is not None else ""
+                        st.markdown(
+                            f"**#{i + 1}** `{cit['sourceId']}` / "
+                            f"`{cit['chunkId']}` · {section}{page_str}"
+                        )
+                        st.caption(cit.get("title") or "")
+                        st.caption(cit.get("url") or "")
+
             # --- retrieval trace ---
             with st.expander("Retrieval trace"):
                 st.json(out.get("retrieval_trace") or {})
+
+            # --- debug latency breakdown ---
+            if debug_payload:
+                with st.expander("Debug payload", expanded=False):
+                    st.json(debug_payload)
 
             # --- raw JSON ---
             st.subheader("Full EvidencePackage JSON")

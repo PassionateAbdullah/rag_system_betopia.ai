@@ -41,7 +41,7 @@ def test_top_level_keys_present():
         retrieval_trace={"foo": "bar"},
     )
     out = pkg.to_dict()
-    assert set(out.keys()) == {
+    assert {
         "original_query",
         "rewritten_query",
         "context_for_agent",
@@ -49,7 +49,9 @@ def test_top_level_keys_present():
         "confidence",
         "coverage_gaps",
         "retrieval_trace",
-    }
+        "citations",
+        "usage",
+    }.issubset(out.keys())
     assert out["original_query"] == "what is the system vision?"
     assert out["rewritten_query"] == "what is the system vision"
     assert out["retrieval_trace"] == {"foo": "bar"}

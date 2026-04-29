@@ -1,14 +1,21 @@
-"""Backend-callable single-file ingestion.
+"""Backend-callable single-file ingestion (dual-write Postgres + Qdrant).
 
-Used by both the CLI (per file) and any backend upload handler. Returns a
-clean IngestionResult on success; raises IngestionError with a stage label
-on failure so the caller can show a precise reason to the user.
+Used by the CLI, the API, and the Streamlit harness. Returns an
+``IngestionResult`` on success; raises ``IngestionError`` with a stage
+label on failure so the caller can show a precise reason to the user.
+
+Modes:
+  * MVP / Qdrant-only — pass ``postgres=None`` (or leave POSTGRES_URL unset).
+  * Production — pass a ``PostgresStore``; chunks are written canonically to
+    Postgres (document + chunks + tsvector) and embeddings go to Qdrant.
+    On a Qdrant failure after a successful Postgres write, the document is
+    rolled back to keep the two stores consistent.
 """
 from __future__ import annotations
 
 import hashlib
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rag.config import Config, load_config
 from rag.embeddings.base import EmbeddingProvider
@@ -16,8 +23,12 @@ from rag.embeddings.default_provider import build_embedding_provider
 from rag.errors import IngestionError
 from rag.ingestion.chunker import chunk_with_sections
 from rag.ingestion.file_loader import detect_file_type, extract_text, is_supported
+from rag.storage import build_postgres_store
 from rag.types import Chunk, IngestionResult, IngestUploadInput
 from rag.vector.qdrant_client import QdrantStore
+
+if TYPE_CHECKING:
+    from rag.storage.postgres import PostgresStore
 
 
 def _short_hash(s: str) -> str:
@@ -30,14 +41,9 @@ def ingest_uploaded_file(
     config: Config | None = None,
     embedder: EmbeddingProvider | None = None,
     store: QdrantStore | None = None,
+    postgres: PostgresStore | None = None,
     batch_size: int = 32,
 ) -> IngestionResult:
-    """Ingest a single uploaded file into Qdrant.
-
-    The injectable `config`, `embedder`, and `store` parameters let callers
-    (backend services, tests) reuse a long-lived embedder/store across many
-    uploads instead of paying setup cost each call.
-    """
     payload = (
         input_data
         if isinstance(input_data, IngestUploadInput)
@@ -65,6 +71,7 @@ def ingest_uploaded_file(
     abs_path = os.path.abspath(file_path)
     title = payload.title or os.path.basename(abs_path)
     source_id = payload.source_id or f"file:{_short_hash(abs_path)}"
+    document_id = source_id
     url = payload.url or abs_path
     file_type = detect_file_type(abs_path)
 
@@ -128,6 +135,7 @@ def ingest_uploaded_file(
                     "userId": payload.user_id,
                     "sectionTitle": sc.section_title,
                     "sectionIndex": sc.section_index,
+                    "documentId": document_id,
                 },
             )
         )
@@ -141,10 +149,42 @@ def ingest_uploaded_file(
         vector_size=emb.dim,
     )
 
-    # --- stage: store (ensure_collection is part of the storage path) ---
+    # Prefer caller-supplied PostgresStore; otherwise auto-build from config.
+    pg = postgres if postgres is not None else build_postgres_store(cfg)
+
+    # --- stage: postgres write (canonical) ---
+    if pg is not None:
+        try:
+            pg.upsert_document(
+                document_id=document_id,
+                workspace_id=payload.workspace_id,
+                source_type=payload.source_type,
+                title=title,
+                url=url,
+                metadata={
+                    "filePath": abs_path,
+                    "fileType": file_type,
+                    "userId": payload.user_id,
+                },
+            )
+            pg.upsert_chunks(chunks, document_id=document_id)
+        except Exception as e:
+            raise IngestionError(
+                f"Postgres upsert failed: {e}",
+                file_path=abs_path,
+                stage="store",
+                cause=e,
+            ) from e
+
+    # --- stage: ensure qdrant collection ---
     try:
         s.ensure_collection()
     except Exception as e:
+        if pg is not None:
+            try:
+                pg.delete_document(document_id)
+            except Exception:
+                pass
         raise IngestionError(
             f"Could not ensure Qdrant collection: {e}",
             file_path=abs_path,
@@ -152,33 +192,84 @@ def ingest_uploaded_file(
             cause=e,
         ) from e
 
-    # --- stage: embed + store, batched ---
+    # --- stage: embed + qdrant upsert (batched) ---
+    qdrant_failed = False
+    last_error: Exception | None = None
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i : i + batch_size]
         try:
             vectors = emb.embed([c.text for c in batch])
         except Exception as e:
-            raise IngestionError(
-                f"Embedding failed: {e}",
-                file_path=abs_path,
-                stage="embed",
-                cause=e,
-            ) from e
+            qdrant_failed = True
+            last_error = e
+            stage = "embed"
+            break
         try:
             s.upsert_chunks(batch, vectors)
         except Exception as e:
-            raise IngestionError(
-                f"Qdrant upsert failed: {e}",
-                file_path=abs_path,
-                stage="store",
-                cause=e,
-            ) from e
+            qdrant_failed = True
+            last_error = e
+            stage = "store"
+            break
+
+    if qdrant_failed and last_error is not None:
+        # Roll back Postgres so the two stores stay consistent.
+        if pg is not None:
+            try:
+                pg.delete_document(document_id)
+            except Exception:
+                pass
+        raise IngestionError(
+            f"Vector index failed: {last_error}",
+            file_path=abs_path,
+            stage=locals().get("stage", "store"),
+            cause=last_error,
+        ) from last_error
 
     return IngestionResult(
         source_id=source_id,
+        document_id=document_id,
         workspace_id=payload.workspace_id,
         title=title,
         chunks_created=len(chunks),
         qdrant_collection=cfg.qdrant_collection,
+        postgres_written=pg is not None,
         status="success",
     )
+
+
+def delete_document(
+    document_id: str,
+    *,
+    config: Config | None = None,
+    store: QdrantStore | None = None,
+    postgres: PostgresStore | None = None,
+) -> dict[str, Any]:
+    """Delete a document from both Postgres and Qdrant.
+
+    Returns a small report — counts dropped per store.
+    """
+    cfg = config or load_config()
+    pg = postgres if postgres is not None else build_postgres_store(cfg)
+    s = store
+
+    pg_deleted = 0
+    if pg is not None:
+        pg_deleted = pg.delete_document(document_id)
+
+    qd_deleted = 0
+    if s is None:
+        # Build a temporary client. embed dim isn't needed for delete.
+        s = QdrantStore(
+            url=cfg.qdrant_url,
+            api_key=cfg.qdrant_api_key,
+            collection=cfg.qdrant_collection,
+            vector_size=cfg.embedding_dim,
+        )
+    qd_deleted = s.delete_by_source_id(document_id)
+
+    return {
+        "documentId": document_id,
+        "postgresChunksDeleted": pg_deleted,
+        "qdrantPointsDeleted": qd_deleted,
+    }

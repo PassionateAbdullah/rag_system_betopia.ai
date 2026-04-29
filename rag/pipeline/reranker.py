@@ -8,12 +8,15 @@ Adds two cheap signals:
 
 The final `rerank_score` is exposed so we can sort and inspect; the original
 `score` (Qdrant cosine) is left untouched for debugging.
+
+Kept for backwards compatibility with the MVP path. The production
+pipeline uses :mod:`rag.reranking` (cross-encoder + weighted fallback).
 """
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
 
+from rag.reranking.base import RerankedChunk
 from rag.types import RetrievedChunk
 
 _TOKEN_RE = re.compile(r"[\w']+")
@@ -36,13 +39,6 @@ def _tokens(text: str) -> list[str]:
 def content_terms(text: str) -> set[str]:
     """Lowercased tokens with stopwords removed and length>=2."""
     return {t for t in _tokens(text) if t not in _STOPWORDS and len(t) >= 2}
-
-
-@dataclass
-class RerankedChunk:
-    chunk: RetrievedChunk
-    rerank_score: float
-    signals: dict[str, float] = field(default_factory=dict)
 
 
 def rerank(

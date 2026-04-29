@@ -62,11 +62,18 @@ class FakeStore:
         query_vector: list[float],
         top_k: int,
         workspace_id: str | None = None,
+        source_types: list[str] | None = None,
+        document_ids: list[str] | None = None,
     ) -> list[RetrievedChunk]:
         results: list[RetrievedChunk] = []
         for i, c in enumerate(self._chunks):
             if workspace_id and c.workspace_id != workspace_id:
                 continue
+            if source_types and c.source_type not in source_types:
+                continue
+            if document_ids and c.source_id not in document_ids:
+                continue
+            score = 0.9 - 0.05 * i
             results.append(
                 RetrievedChunk(
                     source_id=c.source_id,
@@ -76,8 +83,11 @@ class FakeStore:
                     url=c.url,
                     text=c.text,
                     chunk_index=c.chunk_index,
-                    score=0.9 - 0.05 * i,
+                    score=score,
                     metadata=c.metadata,
+                    retrieval_source=["vector"],
+                    vector_score=score,
+                    keyword_score=0.0,
                 )
             )
         return results[:top_k]

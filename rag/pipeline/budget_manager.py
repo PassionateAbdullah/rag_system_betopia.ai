@@ -21,7 +21,8 @@ from __future__ import annotations
 import math
 import re
 
-from rag.pipeline.reranker import RerankedChunk, content_terms
+from rag.pipeline.reranker import content_terms
+from rag.reranking.base import RerankedChunk
 from rag.types import RetrievedChunk
 
 _TOKEN_RE = re.compile(r"[\w']+")

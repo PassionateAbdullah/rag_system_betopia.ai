@@ -28,6 +28,7 @@ class QdrantStore:
     def ensure_collection(self) -> None:
         existing = {c.name for c in self._client.get_collections().collections}
         if self.collection in existing:
+            self._ensure_payload_indexes()
             return
         self._client.create_collection(
             collection_name=self.collection,
@@ -36,15 +37,18 @@ class QdrantStore:
                 distance=qm.Distance.COSINE,
             ),
         )
-        # Index workspaceId for filtered search (cheap, runs once).
-        try:
-            self._client.create_payload_index(
-                collection_name=self.collection,
-                field_name="workspaceId",
-                field_schema=qm.PayloadSchemaType.KEYWORD,
-            )
-        except Exception:
-            pass
+        self._ensure_payload_indexes()
+
+    def _ensure_payload_indexes(self) -> None:
+        for field_name in ("workspaceId", "sourceId", "sourceType", "chunkId"):
+            try:
+                self._client.create_payload_index(
+                    collection_name=self.collection,
+                    field_name=field_name,
+                    field_schema=qm.PayloadSchemaType.KEYWORD,
+                )
+            except Exception:
+                pass
 
     def upsert_chunks(
         self,
@@ -77,17 +81,23 @@ class QdrantStore:
         query_vector: list[float],
         top_k: int,
         workspace_id: str | None = None,
+        source_types: list[str] | None = None,
+        document_ids: list[str] | None = None,
     ) -> list[RetrievedChunk]:
-        query_filter: qm.Filter | None = None
+        must: list[qm.FieldCondition] = []
         if workspace_id:
-            query_filter = qm.Filter(
-                must=[
-                    qm.FieldCondition(
-                        key="workspaceId",
-                        match=qm.MatchValue(value=workspace_id),
-                    )
-                ]
+            must.append(
+                qm.FieldCondition(key="workspaceId", match=qm.MatchValue(value=workspace_id))
             )
+        if source_types:
+            must.append(
+                qm.FieldCondition(key="sourceType", match=qm.MatchAny(any=list(source_types)))
+            )
+        if document_ids:
+            must.append(
+                qm.FieldCondition(key="sourceId", match=qm.MatchAny(any=list(document_ids)))
+            )
+        query_filter = qm.Filter(must=must) if must else None
         response = self._client.query_points(
             collection_name=self.collection,
             query=query_vector,
@@ -96,6 +106,26 @@ class QdrantStore:
             with_payload=True,
         )
         return [RetrievedChunk.from_qdrant_point(p) for p in response.points]
+
+    def delete_by_source_id(self, source_id: str) -> int:
+        """Delete all points for a given sourceId (== documentId in our model)."""
+        try:
+            self._client.delete(
+                collection_name=self.collection,
+                points_selector=qm.FilterSelector(
+                    filter=qm.Filter(
+                        must=[
+                            qm.FieldCondition(
+                                key="sourceId",
+                                match=qm.MatchValue(value=source_id),
+                            )
+                        ]
+                    )
+                ),
+            )
+            return 1
+        except Exception:
+            return 0
 
     def info(self) -> dict[str, Any]:
         try:

@@ -1,4 +1,4 @@
-# Betopia RAG MVP
+# Betopia RAG
 
 > **Full developer guide:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 > ([printable HTML](docs/ARCHITECTURE.html))
@@ -6,31 +6,46 @@
 > tuning knobs, and upgrade path.
 
 
-Minimal CLI-based RAG system. Returns an `EvidencePackage` that an outer agent
+Production-grade RAG system. Returns an `EvidencePackage` that an outer agent
 consumes — the RAG layer does **not** generate the final natural-language answer.
+
+Two modes share one code path:
+
+- **MVP (Qdrant-only).** `POSTGRES_URL` unset. Vector search only. No extra deps.
+- **Production (hybrid).** `POSTGRES_URL` set. Adds canonical Postgres chunk
+  store, FTS keyword leg, candidate expansion, pluggable reranker
+  (cross-encoder / Jina / Qwen), pluggable compressor (extractive / LLM),
+  citations, usage, eval log.
+
+External `EvidencePackage` shape is identical across modes — the agent never
+has to branch.
 
 ## Pipeline
 
 ```
 query
-  → cleaner (typo fix + lead-in strip)
-  → embed
-  → Qdrant top-K
-  → dedupe (chunkId / sourceId+index / exact text)
-  → rerank (vector + section-heading overlap + term overlap)
-  → token-budget select
-  → per-chunk extractive compress (sentences containing query terms + neighbors)
-  → EvidencePackage
+  → query understanding (rule-based classifier)
+  → query rewrite v2 (rules + optional LLM polish)
+       cleanedQuery, keywordQuery, semanticQueries, mustHaveTerms
+  → source router (documents / knowledge_base / future routes)
+  → hybrid retrieval (Postgres FTS ‖ Qdrant vector — parallel, merged + normalised)
+  → candidate expansion (neighbour chunks via Postgres, optional)
+  → rerank (fallback weighted | cross-encoder | Jina/Qwen HTTP)
+  → dedupe (id / pos / text / shingle Jaccard / neighbour collapse)
+  → MMR + token budget
+  → context compression (noop | extractive | LLM, with verbatim guard)
+  → EvidencePackage  (context_for_agent, evidence, citations, usage, debug, trace)
 ```
 
 **Section-aware ingestion.** PDFs and markdown are split into top-level
 sections by markdown `#`/`##` headings or numbered headings like
-`4. System Vision`. Chunks never cross those boundaries — a chunk in
-`4. System Vision` will not bleed into `5. GPU Server Findings`. Each
-chunk records `metadata.sectionTitle` so the reranker can boost it.
+`4. System Vision`. Chunks never cross those boundaries. Each chunk records
+`metadata.sectionTitle` so the reranker can boost it.
 
-Storage layer: Qdrant only. No Postgres, Elasticsearch, Meilisearch, reranker,
-LLM compression, or MCP in the MVP — those land in the production system later.
+**Dual-write ingestion.** When Postgres is configured, chunks are written
+canonically to Postgres (`documents` + `document_chunks` with `tsvector`
+trigger) and embeddings to Qdrant. Qdrant failure rolls back the Postgres
+write to keep the two stores consistent.
 
 ## Project layout
 
@@ -38,27 +53,58 @@ LLM compression, or MCP in the MVP — those land in the production system later
 rag/
   types.py
   config.py
+  eval_log.py
+  errors.py
   cli/
     ingest.py
     query.py
   ingestion/
     file_loader.py
     chunker.py
+    upload.py            # ingest_uploaded_file (dual-write)
     ingest_pipeline.py
   embeddings/
     base.py
     default_provider.py
   vector/
     qdrant_client.py
+  storage/                # Postgres canonical store + FTS (optional)
+    postgres.py
+    migrations/0001_init.sql
+  retrieval/              # hybrid keyword + vector
+    hybrid.py
+    keyword.py            # PostgresKeywordBackend (FTS)
+    vector.py
+  reranking/              # pluggable rerankers
+    base.py
+    fallback.py           # weighted vector + keyword + metadata
+    cross_encoder.py      # sentence-transformers CrossEncoder
+    http_remote.py        # Jina / Qwen / any /rerank endpoint
+  compression/            # pluggable compressors
+    base.py
+    noop.py
+    extractive.py         # default (free, deterministic)
+    llm_compressor.py     # OpenAI-compatible chat with verbatim guard
   pipeline/
     query_cleaner.py
-    retriever.py
+    query_understanding.py
+    query_rewriter_v2.py
+    source_router.py
+    candidate_expansion.py
     deduper.py
-    budget_manager.py
+    reranker.py           # MVP-compat heading+term reranker
+    compressor.py         # MVP-compat extractive compressor
+    budget_manager.py     # token budget + MMR
     evidence_builder.py
-    run.py            # main entry: run_rag_tool(input)
+    run.py                # main entry: run_rag_tool(input)
+  api/
+    app.py                # FastAPI: /v1/* + /internal/rag/*
+    server.py
+    schemas.py
 tests/
-data/docs/             # sample docs
+data/docs/                # sample docs
+ui/
+  app.py                  # Streamlit harness
 ```
 
 ## 1. Start Qdrant locally
@@ -73,11 +119,24 @@ Verify:
 curl http://localhost:6333/collections
 ```
 
+## 1b. (Production only) Start Postgres
+
+```bash
+docker run -d --name pg-rag \
+  -e POSTGRES_USER=rag -e POSTGRES_PASSWORD=rag -e POSTGRES_DB=betopia_rag \
+  -p 5432:5432 postgres:16
+```
+
+Set `POSTGRES_URL=postgresql://rag:rag@localhost:5432/betopia_rag` in `.env`.
+Migrations run automatically on API startup (and on first `PostgresStore.migrate()`).
+
 ## 2. Install
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e .[local-embeddings,markitdown,ui,dev]
+# Production extras (Postgres + cross-encoder reranker + API):
+pip install -e .[postgres,reranker,api]
 ```
 
 Extras:
@@ -85,6 +144,9 @@ Extras:
   you'll use the HTTP embedding provider instead.
 - `markitdown` — Microsoft markitdown for DOCX/XLSX/PPTX/HTML/CSV + better
   PDF extraction. Skip and PDFs fall back to `pypdf`.
+- `postgres` — `psycopg[binary,pool]` for the canonical store + FTS leg.
+- `reranker` — `sentence-transformers` for the cross-encoder reranker.
+- `api` — FastAPI + uvicorn + python-multipart for the HTTP service.
 - `ui` — Streamlit test harness (`streamlit run ui/app.py`).
 - `dev` — pytest, ruff, mypy.
 
@@ -170,56 +232,59 @@ Other flags: `--max-tokens`, `--max-chunks`, `--workspace-id`, `--user-id`.
       "score": 0.94
     }
   ],
-  "evidence": [
+  "evidence": [ /* full reranked audit trail with vector+rerank scores */ ],
+  "citations": [
     {
       "sourceId": "file:abc123",
-      "sourceType": "document",
       "chunkId": "file:abc123:5",
       "title": "design.pdf",
       "url": "/abs/path/design.pdf",
-      "text": "(full chunk text, pre-compression)",
-      "score": 0.78,
-      "rerankScore": 0.94,
-      "sectionTitle": "4. System Vision",
-      "metadata": {
-        "chunkIndex": 5,
-        "filePath": "...",
-        "fileType": "pdf",
-        "sectionTitle": "4. System Vision",
-        "sectionIndex": 3,
-        "rerankSignals": {"vectorScore": 0.78, "headingOverlap": 2, "termOverlap": 3}
-      }
+      "page": null,
+      "section": "4. System Vision"
     }
   ],
+  "usage": {
+    "estimatedTokens": 612,
+    "maxTokens": 4000,
+    "returnedChunks": 4
+  },
   "confidence": 0.83,
   "coverage_gaps": [],
   "retrieval_trace": {
     "rewrittenQuery": "what is the system vision",
-    "retrievedCount": 20,
-    "dedupedCount": 14,
-    "rerankedCount": 14,
-    "selectedCount": 4,
-    "estimatedTokens": 612,
-    "maxTokens": 4000,
-    "maxChunks": 8,
-    "topVectorScore": 0.78,
+    "queryUnderstanding": { "queryType": "exploratory", "needsExactKeywordMatch": false, ... },
+    "rewrite": { "keywordQuery": "...", "semanticQueries": [...], "mustHaveTerms": [...] },
+    "searchPlan": { "routes": ["documents"], "useKeyword": true, "useVector": true, ... },
+    "retrievalStats": { "keywordCount": 12, "vectorCount": 18, "mergedCount": 26, "overlapCount": 4 },
+    "rerankerProvider": "fallback",
+    "compressionProvider": "extractive",
+    "postgresEnabled": true,
+    "selectionStrategy": "mmr",
+    "preCompressionChars": 4210,
+    "postCompressionChars": 2105,
+    "compressionRatio": 0.5,
     "topRerankScore": 0.94,
-    "topSectionTitle": "4. System Vision",
     "embeddingModel": "BAAI/bge-m3",
     "vectorDim": 1024,
     "qdrantCollection": "betopia_rag_mvp"
-  }
+  },
+  "debug": { "latencyMs": { "queryRewrite": 1.2, "retrieval_keyword": 7.4, ... } }
 }
 ```
 
-- `context_for_agent` — compressed, agent-ready text. Only sentences containing
-  query content terms (with one-sentence neighbors) survive. This is what the
-  outer LLM agent sees.
-- `evidence` — full reranked trail with vector + rerank scores + signals, for
-  audit.
+- `context_for_agent` — compressed, agent-ready text. This is what the outer
+  LLM agent consumes.
+- `evidence` — full reranked trail with `vector` / `rerank` scores + per-signal
+  reasons. For audit.
+- `citations` — flat list (sourceId, chunkId, title, url, page, section) so the
+  agent can render references next to its answer.
+- `usage` — estimated tokens vs. budget vs. returned chunk count.
 - `confidence` — 0..1, derived from top vector score and query-term coverage.
 - `coverage_gaps` — query content terms not present in any selected chunk.
-- `retrieval_trace` — per-stage counts + scores + collection/model names.
+- `retrieval_trace` — per-stage counts + scores + collection/model names + the
+  `searchPlan` and `retrievalStats` from the hybrid leg.
+- `debug` — populated when `debug=true` is sent on the request. Includes
+  per-stage latencies.
 
 ## Programmatic use
 
@@ -333,13 +398,19 @@ OpenAPI docs auto-generated at `http://localhost:8080/docs` and
 
 ### Endpoints
 
+Two surfaces share resources and shapes:
+
 | Method | Path | Purpose |
 |---|---|---|
-| GET  | `/v1/health` | Liveness + Qdrant + embedding info. **Always open** so load balancers can probe. |
+| GET  | `/v1/health` | Liveness + Qdrant + Postgres + embedding + pipeline info. **Always open** so load balancers can probe. |
 | GET  | `/v1/info` | Config snapshot, supported extensions, auth flag. |
 | POST | `/v1/ingest/upload` | Multipart file upload → auto-ingest → `IngestionResult`. |
 | POST | `/v1/ingest/file` | JSON `{filePath, workspaceId, userId, ...}` → ingests a file already on the RAG service's filesystem. |
 | POST | `/v1/query` | JSON query → `EvidencePackage`. Same shape as `run_rag_tool`. |
+| POST | `/internal/rag/search` | Production search surface — same shape as `/v1/query` (citations + usage + debug). |
+| POST | `/internal/rag/ingest` | Production multipart ingest — dual-writes Postgres + Qdrant when configured. |
+| DELETE | `/internal/rag/documents/{document_id}` | Deletes from both Postgres + Qdrant. |
+| POST | `/internal/rag/reindex/{document_id}` | Re-embeds all chunks from Postgres → replaces Qdrant points. |
 
 ### Auth
 
@@ -449,28 +520,42 @@ Then open the URL Streamlit prints. Tabs:
 Sidebar lets you change `workspaceId`, `userId`, `maxChunks`, `maxTokens`, and
 shows live Qdrant point count + embedding model info.
 
+## Eval log
+
+Set `ENABLE_EVAL_LOG=true` and `EVAL_LOG_PATH=logs/eval.jsonl`. One JSONL
+record per `run_rag_tool` call: timings, retrieval counts, rewriter/reranker
+used, confidence, coverage gaps, low-confidence + empty-result flags. Designed
+for offline scoring of retrieval precision, citation accuracy, hallucination
+risk, token savings, and latency.
+
 ## Tests
 
 ```bash
 pytest -q
 ```
 
-Covers chunker, query cleaner, deduper, budget manager, and evidence package shape.
-No tests hit Qdrant or download embedding models.
+Covers chunker, query cleaner, deduper, budget manager, evidence package,
+query understanding, rewriter v2, source router, hybrid retrieval, candidate
+expansion, fallback reranker, compression layer, eval log, and the API.
+Postgres-only modules are lazy-imported — tests don't require psycopg.
 
 ## Lint / type-check
 
 ```bash
 ruff check rag tests
+mypy rag
 ```
 
-## Intentionally NOT in MVP
+## Tuning knobs
 
-- Postgres / SQL store
-- Elasticsearch / Meilisearch / BM25 hybrid
-- Cross-encoder / Cohere / LLM-based reranker
-- LLM-based query rewriting or context compression
-- MCP server
-- Final natural-language answer generation (the outer agent does this)
-- Streaming / async pipelines
-- Multi-tenant auth, rate limiting, observability
+| Knob | Env var | Default | Effect |
+|---|---|---|---|
+| Hybrid leg | `ENABLE_HYBRID_RETRIEVAL` | `true` | Disable to force vector-only even with Postgres. |
+| Reranker | `RERANKER_PROVIDER` | `fallback` | `fallback` / `cross-encoder` / `jina` / `qwen`. |
+| Compressor | `COMPRESSION_PROVIDER` | `extractive` | `noop` / `extractive` / `llm`. |
+| Query rewriter | `QUERY_REWRITER` | `rules` | `rules` / `llm` (with optional LLM polish). |
+| Candidate expansion | `ENABLE_CANDIDATE_EXPANSION` | `false` | Pull neighbour chunks (Postgres only). |
+| Eval log | `ENABLE_EVAL_LOG` | `false` | Append JSONL records for offline scoring. |
+| Hybrid weights | (code) | `0.55v + 0.45k` | `rag/retrieval/hybrid.py`. |
+| MMR lambda | (code) | `0.7` | `rag/pipeline/budget_manager.py`. |
+| Dedupe Jaccard | (code) | `0.85` | `rag/pipeline/deduper.py`. |
