@@ -19,8 +19,37 @@ from dataclasses import dataclass
 _WS_RE = re.compile(r"\s+")
 _LINE_WS_RE = re.compile(r"[ \t]+")
 
-# Top-level numbered: "4. System Vision", "12. Conclusion". NOT "4.1 X".
-_NUMBERED_HEADING_RE = re.compile(r"^\s*(\d+)\.\s+([A-Z][^\n]{1,120})\s*$")
+# Top-level numbered chapter heading: "4. System Vision", "12. Conclusion".
+# NOT "4.1 X" (subsection). NOT "1787. Eventually..." (historical year /
+# narrative sentence). Constraints:
+#   - chapter number 1..199 (rejects 4-digit years)
+#   - title length 3..80 chars (rejects rambling sentences)
+#   - title may not end with a period (chapter titles don't)
+#   - title cannot contain a comma followed by a lowercase verb (sentence-ish)
+_NUMBERED_HEADING_RE = re.compile(
+    r"^\s*(?P<num>[1-9]\d{0,2})\.\s+(?P<title>[A-Z][^\n]{2,80})\s*$"
+)
+
+
+def _is_chapter_heading(num: int, title: str) -> bool:
+    if num > 199:
+        return False
+    if title.endswith("."):
+        return False
+    # Sentence-like: contains lowercase verbs after a comma. Cheap heuristic.
+    if "," in title and re.search(r",\s+[a-z]+\s", title):
+        return False
+    # Reject lines with too many lowercase words — chapter titles are mostly
+    # title-case. Allow a few connectors (of/the/and/...).
+    words = title.split()
+    if len(words) >= 3:
+        connectors = {"of", "the", "and", "or", "in", "on", "at", "to", "for", "a"}
+        lower_non_connector = sum(
+            1 for w in words if w.islower() and w not in connectors
+        )
+        if lower_non_connector >= 2:
+            return False
+    return True
 # Markdown heading at any level.
 _MD_HEADING_RE = re.compile(r"^\s*(#{1,6})\s+(.+?)\s*#*\s*$")
 
@@ -69,14 +98,16 @@ def split_into_sections(text: str) -> list[Section]:
         md_m = _MD_HEADING_RE.match(line)
         num_m = _NUMBERED_HEADING_RE.match(line)
         is_top_md = bool(md_m) and len(md_m.group(1)) <= 2
-        is_top_num = bool(num_m)
+        is_top_num = bool(num_m) and _is_chapter_heading(
+            int(num_m.group("num")), num_m.group("title").strip()
+        )
 
         if is_top_md or is_top_num:
             flush()
             if is_top_md:
                 current_title = md_m.group(2).strip()
             else:
-                current_title = f"{num_m.group(1)}. {num_m.group(2).strip()}"
+                current_title = f"{num_m.group('num')}. {num_m.group('title').strip()}"
             current_lines = []
         else:
             current_lines.append(line)
