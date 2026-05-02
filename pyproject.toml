@@ -8,6 +8,7 @@ dependencies = [
     "httpx>=0.27.0",
     "python-dotenv>=1.0.0",
     "pypdf>=4.0.0",
+    "pymupdf>=1.24.0",
 ]
 
 [project.optional-dependencies]
@@ -25,9 +26,14 @@ ui = [
 ]
 markitdown = [
     # Microsoft markitdown: PDF/DOCX/XLSX/PPTX/HTML/CSV -> clean markdown
-    # with headings preserved. Without this extra, pypdf is used for PDFs
-    # and only .txt/.md/.pdf are supported.
+    # with headings preserved. Optional — DOCX/XLSX/PPTX still need this;
+    # PDFs default to pymupdf (much faster).
     "markitdown[all]>=0.1.0",
+]
+pdf-rich = [
+    # pdfplumber for table-aware PDF extraction (slower than pymupdf,
+    # better for spreadsheet-style PDFs).
+    "pdfplumber>=0.11.0",
 ]
 api = [
     "fastapi>=0.110.0",
