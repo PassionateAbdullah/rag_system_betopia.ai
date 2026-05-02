@@ -1,19 +1,15 @@
 """File walking + per-extension text extraction.
 
-Two extraction backends:
+PDF loader chain (auto):
+   pymupdf  →  pdfplumber  →  pypdf  →  markitdown
+Pick fastest available. markitdown is last because it is 10–100× slower
+on big PDFs (multi-converter chain).
 
-1. **Plain text** (`.txt`, `.md`, `.markdown`) — read directly as UTF-8.
-   No conversion needed; markdown is already what the chunker wants.
+Other formats:
+   .txt / .md / .markdown      — read directly as UTF-8
+   .docx / .xlsx / .pptx / .html / .csv — markitdown (required)
 
-2. **Structured / binary formats** (`.pdf`, `.docx`, `.xlsx`, `.pptx`,
-   `.html`, `.htm`, `.csv`) — converted to markdown via Microsoft
-   markitdown when the optional `[markitdown]` extra is installed.
-   This preserves headings/tables so the section-aware chunker can
-   detect `# Heading` / `## Subheading` boundaries.
-
-3. **PDF fallback** — when markitdown is not installed, PDFs fall back
-   to pypdf raw-text extraction. Headings are not preserved in this
-   path, so the chunker relies on numbered-heading detection only.
+Override via PDF_LOADER env: auto | pymupdf | pdfplumber | pypdf | markitdown.
 """
 from __future__ import annotations
 
@@ -32,6 +28,22 @@ _MARKITDOWN_EXTS = {".docx", ".xlsx", ".xls", ".pptx", ".html", ".htm", ".csv"}
 def _markitdown_available() -> bool:
     try:
         import markitdown  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _pymupdf_available() -> bool:
+    try:
+        import fitz  # noqa: F401  pymupdf
+        return True
+    except ImportError:
+        return False
+
+
+def _pdfplumber_available() -> bool:
+    try:
+        import pdfplumber  # noqa: F401
         return True
     except ImportError:
         return False
@@ -81,31 +93,16 @@ def is_supported(path: str) -> bool:
 def extract_text(path: str, *, pdf_loader: str = "auto") -> str:
     """Extract text/markdown from a single file.
 
-    Routing:
-      - .txt/.md/.markdown -> read raw
-      - .pdf               -> markitdown if available + pdf_loader != "pypdf",
-                              else pypdf. Set PDF_LOADER=pypdf for big/long
-                              books — markitdown can take many minutes on them.
-      - .docx/.xlsx/.pptx/.html/.csv -> markitdown (required)
+    PDF loader: ``auto`` walks pymupdf → pdfplumber → pypdf → markitdown.
+    Other values force a specific backend. markitdown is the slowest;
+    only choose it when you need rich heading/table preservation on
+    docs we can't otherwise structure.
     """
     ftype = detect_file_type(path)
     if ftype in ("text", "markdown"):
         return _read_text(path)
     if ftype == "pdf":
-        loader = (pdf_loader or "auto").lower()
-        if loader == "pypdf":
-            return _read_pdf_with_pypdf(path)
-        if loader == "markitdown":
-            if not _markitdown_available():
-                raise RuntimeError(
-                    "PDF_LOADER=markitdown but markitdown is not installed. "
-                    "Install with: pip install -e .[markitdown]"
-                )
-            return _read_with_markitdown(path)
-        # auto
-        if _markitdown_available():
-            return _read_with_markitdown(path)
-        return _read_pdf_with_pypdf(path)
+        return _read_pdf(path, loader=(pdf_loader or "auto").lower())
     if ftype in ("docx", "xlsx", "pptx", "html", "csv"):
         if not _markitdown_available():
             raise RuntimeError(
@@ -114,6 +111,28 @@ def extract_text(path: str, *, pdf_loader: str = "auto") -> str:
             )
         return _read_with_markitdown(path)
     raise ValueError(f"Unsupported file type: {path}")
+
+
+def _read_pdf(path: str, *, loader: str) -> str:
+    """Run the requested PDF loader, or pick the fastest available in auto."""
+    if loader == "pymupdf":
+        return _read_pdf_with_pymupdf(path)
+    if loader == "pdfplumber":
+        return _read_pdf_with_pdfplumber(path)
+    if loader == "pypdf":
+        return _read_pdf_with_pypdf(path)
+    if loader == "markitdown":
+        if not _markitdown_available():
+            raise RuntimeError(
+                "PDF_LOADER=markitdown but markitdown is not installed."
+            )
+        return _read_with_markitdown(path)
+    # auto: fastest first.
+    if _pymupdf_available():
+        return _read_pdf_with_pymupdf(path)
+    if _pdfplumber_available():
+        return _read_pdf_with_pdfplumber(path)
+    return _read_pdf_with_pypdf(path)
 
 
 def load_files(root: str) -> Iterator[tuple[str, str]]:
@@ -157,6 +176,48 @@ def _read_pdf_with_pypdf(path: str) -> str:
             text = ""
         if text:
             parts.append(text)
+    return "\n\n".join(parts)
+
+
+def _read_pdf_with_pymupdf(path: str) -> str:
+    """Fastest path: PyMuPDF (fitz). 5–10× faster than pypdf on big PDFs.
+
+    AGPL licensed — fine for internal/server use; review before bundling
+    into a closed-source product distribution.
+    """
+    try:
+        import fitz  # type: ignore
+    except ImportError as e:
+        raise RuntimeError(
+            "pymupdf not installed. Install with: pip install pymupdf"
+        ) from e
+    parts: list[str] = []
+    with fitz.open(path) as doc:
+        for page in doc:
+            text = page.get_text("text") or ""
+            if text:
+                parts.append(text)
+    return "\n\n".join(parts)
+
+
+def _read_pdf_with_pdfplumber(path: str) -> str:
+    """pdfplumber — slower than pymupdf but better for structured tables.
+    MIT licensed."""
+    try:
+        import pdfplumber  # type: ignore
+    except ImportError as e:
+        raise RuntimeError(
+            "pdfplumber not installed. Install with: pip install pdfplumber"
+        ) from e
+    parts: list[str] = []
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            try:
+                text = page.extract_text() or ""
+            except Exception:
+                text = ""
+            if text:
+                parts.append(text)
     return "\n\n".join(parts)
 
 
