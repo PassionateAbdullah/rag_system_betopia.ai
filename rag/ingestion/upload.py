@@ -202,46 +202,55 @@ def ingest_uploaded_file(
             cause=e,
         ) from e
 
-    # --- stage: embed + qdrant upsert (pipelined) ---
-    # Embed batch N+1 while batch N uploads to Qdrant. Wall-clock ≈ max(embed, upsert)
-    # per batch instead of sum(embed, upsert). Bounded executor keeps memory low.
+    # --- stage: embed + qdrant upsert (fully pipelined) ---
+    # Run multiple embed batches concurrently AND overlap with Qdrant upsert.
+    # Wall-clock ≈ max(embed, upsert) / concurrency per batch.
+    # Bounded executor keeps RAM in check on huge docs.
+    embed_concurrency = max(1, int(os.getenv("INGEST_EMBED_CONCURRENCY", "4")))
+    upsert_concurrency = 4
+    inflight_cap = embed_concurrency + upsert_concurrency
+
+    class _StagedError(Exception):
+        def __init__(self, stage: str, cause: Exception) -> None:
+            self.stage = stage
+            self.cause = cause
+
+    def _embed_then_upsert(batch_chunks: list[Chunk]) -> None:
+        try:
+            vectors = emb.embed([c.text for c in batch_chunks])
+        except Exception as e:
+            raise _StagedError("embed", e) from e
+        try:
+            s.upsert_chunks(batch_chunks, vectors)
+        except Exception as e:
+            raise _StagedError("store", e) from e
+
     qdrant_failed = False
     last_error: Exception | None = None
     stage = "store"
-    pending: list[tuple[int, cf.Future]] = []
-    with cf.ThreadPoolExecutor(max_workers=4) as upsert_pool:
+    pending: list[cf.Future] = []
+    with cf.ThreadPoolExecutor(max_workers=inflight_cap) as pool:
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i : i + batch_size]
-            try:
-                vectors = emb.embed([c.text for c in batch])
-            except Exception as e:
-                qdrant_failed = True
-                last_error = e
-                stage = "embed"
-                break
-            fut = upsert_pool.submit(s.upsert_chunks, batch, vectors)
-            pending.append((i, fut))
-            # Backpressure: don't queue more than a handful of pending
-            # batches — keeps RAM bounded on huge docs.
-            while len(pending) >= 4:
-                _, f = pending.pop(0)
+            pending.append(pool.submit(_embed_then_upsert, batch))
+            while len(pending) >= inflight_cap:
+                done = pending.pop(0)
                 try:
-                    f.result()
-                except Exception as e:
+                    done.result()
+                except _StagedError as se:
                     qdrant_failed = True
-                    last_error = e
-                    stage = "store"
+                    last_error = se.cause
+                    stage = se.stage
                     break
             if qdrant_failed:
                 break
-        # Drain remaining futures.
-        for _, f in pending:
+        for f in pending:
             try:
                 f.result()
-            except Exception as e:
+            except _StagedError as se:
                 qdrant_failed = True
-                last_error = e
-                stage = "store"
+                last_error = se.cause
+                stage = se.stage
 
     if qdrant_failed and last_error is not None:
         # Roll back Postgres so the two stores stay consistent.
