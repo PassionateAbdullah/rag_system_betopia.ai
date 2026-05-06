@@ -1,0 +1,20 @@
+# Golden eval set — JSONL, one item per line. Lines starting with '#' or blank are ignored.
+# Schema:
+#   {"id": str, "query": str, "workspaceId"?: str,
+#    "expectedSourceIds"?: [str], "expectedSubstrings"?: [str],
+#    "tags"?: [str], "notes"?: str}
+# A retrieved chunk = relevant if its sourceId is in expectedSourceIds OR any
+# expectedSubstring is a substring of chunk.text (case-insensitive).
+#
+# Seed examples below are based on the bangladesh-dengue test doc.
+# Add 30-50 entries spanning your real corpus before trusting metrics.
+{"id": "dengue-2023-peak-month", "query": "what was the peak month for dengue in bangladesh 2023", "workspaceId": "default", "expectedSubstrings": ["September 2023", "79,598"], "tags": ["numeric", "table", "dates"], "notes": "Peak = Sept 2023, 79,598 cases."}
+{"id": "dengue-2024-cases", "query": "how many dengue cases in bangladesh in 2024", "workspaceId": "default", "expectedSubstrings": ["101,214", "575 deaths"], "tags": ["numeric", "year"], "notes": ""}
+{"id": "dengue-inflection-point", "query": "what was the 2023 inflection point in bangladesh dengue", "workspaceId": "default", "expectedSubstrings": ["inflection point", "321,179"], "tags": ["concept"], "notes": "Tests semantic match on key phrase."}
+{"id": "dengue-typo-inflation", "query": "what was the 2023 inflation point in bangladesh dengue", "workspaceId": "default", "expectedSubstrings": ["inflection point", "321,179"], "tags": ["typo", "concept"], "notes": "User typo: inflation → inflection. Tests query rewriter / fuzzy match."}
+{"id": "dengue-geographic-2023", "query": "which districts in bangladesh had dengue cases in 2023", "workspaceId": "default", "expectedSubstrings": ["all 64 districts", "64 districts"], "tags": ["geographic"], "notes": ""}
+{"id": "dengue-research-priorities", "query": "what are the research priorities for dengue surveillance in bangladesh", "workspaceId": "default", "expectedSubstrings": ["serotype", "genomic surveillance", "mortality audits"], "tags": ["concept", "list"], "notes": ""}
+{"id": "dengue-monthly-table-jul", "query": "how many dengue cases in july 2023 bangladesh", "workspaceId": "default", "expectedSubstrings": ["43,854", "Jul"], "tags": ["numeric", "table", "months"], "notes": "Tests row-level table retrieval."}
+{"id": "dengue-monthly-table-aug", "query": "august 2023 dengue cases bangladesh", "workspaceId": "default", "expectedSubstrings": ["71,976", "Aug"], "tags": ["numeric", "table", "months"], "notes": ""}
+{"id": "dengue-2025-deaths", "query": "how many dengue deaths in bangladesh 2025", "workspaceId": "default", "expectedSubstrings": ["413 deaths", "102,861"], "tags": ["numeric", "year"], "notes": ""}
+{"id": "dengue-preparedness-window", "query": "when should dengue preparedness extend in bangladesh", "workspaceId": "default", "expectedSubstrings": ["post-monsoon", "preparedness window"], "tags": ["concept"], "notes": ""}
