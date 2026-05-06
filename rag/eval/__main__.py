@@ -3,13 +3,17 @@
 Usage:
     python -m rag.eval data/eval/golden.jsonl
     python -m rag.eval data/eval/golden.jsonl -o reports/eval-2026-05-06.json
-    python -m rag.eval data/eval/golden.jsonl --tag numeric
+    python -m rag.eval data/eval/golden.jsonl --no-save  # skip auto-save
+
+Default: every run auto-saves to reports/eval-{YYYY-MM-DD-HHMMSS}.json so
+you have a history to diff later. Disable with --no-save.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from rag.eval.runner import evaluate
@@ -51,6 +55,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("golden", help="Path to golden JSONL file.")
     p.add_argument("-o", "--output", help="Write JSON report to this path.")
     p.add_argument("-q", "--quiet", action="store_true", help="Skip text summary.")
+    p.add_argument(
+        "--no-save",
+        action="store_true",
+        help="Skip default auto-save to reports/eval-<timestamp>.json.",
+    )
+    p.add_argument(
+        "--reports-dir",
+        default="reports",
+        help="Directory for auto-saved reports (default: reports/).",
+    )
     args = p.parse_args(argv)
 
     golden_path = Path(args.golden)
@@ -63,8 +77,14 @@ def main(argv: list[str] | None = None) -> int:
     if not args.quiet:
         print(_format_summary(report))
 
+    out_path: Path | None = None
     if args.output:
         out_path = Path(args.output)
+    elif not args.no_save:
+        ts = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        out_path = Path(args.reports_dir) / f"eval-{ts}.json"
+
+    if out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(
             json.dumps(report.to_dict(), indent=2, ensure_ascii=False),
