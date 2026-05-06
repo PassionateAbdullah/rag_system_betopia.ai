@@ -169,7 +169,7 @@ Single `EvidencePackage` shape regardless of strategy. Caller never branches.
 | Multi-modal | **0/10** | Text only. |
 | Doc-type adaptive | **2/10** | Same pipeline regardless of input. |
 | Production hardening | **6/10** | Dual-write rollback, lazy imports, auth, CORS, health probe. |
-| Eval / regression | **3/10** | Eval log records, no harness yet. |
+| Eval / regression | **5/10** | Eval log + offline harness ([rag/eval](../rag/eval/)). Playbook: [EVAL_PLAYBOOK.md](EVAL_PLAYBOOK.md). |
 
 **Overall: enterprise-credible MVP. Solid foundation. Not yet at Claude/Perplexity level.**
 
