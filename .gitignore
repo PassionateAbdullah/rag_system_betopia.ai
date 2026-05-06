@@ -11,3 +11,6 @@ venv/
 dist/
 build/
 qdrant_storage/
+
+# Eval reports — auto-saved per run, keep local
+reports/
