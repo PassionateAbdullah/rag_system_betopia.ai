@@ -50,6 +50,13 @@ def _coverage_gaps(query: str, contexts: list[ContextItem]) -> list[str]:
     return [f"no chunk matched '{t}'" for t in missing]
 
 
+def _agent_context_text(c) -> str:
+    parent = (c.metadata or {}).get("parentText")
+    if isinstance(parent, str) and parent.strip() and parent.strip() != c.text.strip():
+        return f"{c.text}\n\n[parent]\n{parent}"
+    return c.text
+
+
 def build_evidence_package(
     *,
     original_query: str,
@@ -76,8 +83,9 @@ def build_evidence_package(
         c = r.chunk
         section = (c.metadata or {}).get("sectionTitle")
         page = (c.metadata or {}).get("page")
+        context_text = _agent_context_text(c)
         result = comp.compress(
-            CompressionInput(text=c.text, query=rewritten_query, must_have_terms=must)
+            CompressionInput(text=context_text, query=rewritten_query, must_have_terms=must)
         )
         contexts.append(
             ContextItem(

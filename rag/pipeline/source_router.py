@@ -35,20 +35,36 @@ def plan(
     if not routes:
         routes = ["documents", "knowledge_base"]
 
-    use_keyword = cfg.enable_hybrid_retrieval and bool(cfg.postgres_url)
+    use_keyword = cfg.enable_hybrid_retrieval
     if understanding.needs_exact_keyword_match:
         # Always try keyword path when the user signalled exact match —
-        # the orchestrator will silently skip if Postgres is unavailable.
+        # the orchestrator can use Postgres FTS or the Qdrant-local lexical leg.
         use_keyword = True
+
+    keyword_top_k = cfg.keyword_top_k
+    vector_top_k = cfg.vector_top_k
+    merged_limit = cfg.merged_candidate_limit
+    rerank_top_k = cfg.rerank_top_k
+    if understanding.needs_multi_hop or understanding.query_type in {
+        "comparison",
+        "decision_support",
+        "troubleshooting",
+    }:
+        keyword_top_k = int(keyword_top_k * 1.5)
+        vector_top_k = int(vector_top_k * 1.5)
+        merged_limit = int(merged_limit * 1.5)
+        rerank_top_k = int(rerank_top_k * 1.25)
+    if understanding.needs_exact_keyword_match:
+        keyword_top_k = int(keyword_top_k * 1.5)
 
     return SearchPlan(
         routes=routes,
         use_keyword=use_keyword,
         use_vector=True,
-        keyword_top_k=cfg.keyword_top_k,
-        vector_top_k=cfg.vector_top_k,
-        merged_limit=cfg.merged_candidate_limit,
-        rerank_top_k=cfg.rerank_top_k,
+        keyword_top_k=max(1, keyword_top_k),
+        vector_top_k=max(1, vector_top_k),
+        merged_limit=max(1, merged_limit),
+        rerank_top_k=max(1, rerank_top_k),
     )
 
 

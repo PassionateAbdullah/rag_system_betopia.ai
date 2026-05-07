@@ -17,4 +17,3 @@ def retrieve(
         return []
     vector = embedder.embed_one(query)
     return store.search(vector, top_k=top_k, workspace_id=workspace_id)
-        

@@ -106,21 +106,39 @@ class RetrievedChunk:
     @classmethod
     def from_qdrant_point(cls, point: Any) -> RetrievedChunk:
         p = point.payload or {}
+        if "chunkId" not in p:
+            p = dict(p)
+            p["chunkId"] = str(point.id)
+        return cls.from_payload(
+            p,
+            score=float(point.score or 0.0),
+            retrieval_source=["vector"],
+        )
+
+    @classmethod
+    def from_payload(
+        cls,
+        payload: dict[str, Any],
+        *,
+        score: float = 0.0,
+        retrieval_source: list[str] | None = None,
+    ) -> RetrievedChunk:
+        p = payload or {}
         meta = dict(p.get("metadata") or {})
         meta.setdefault("chunkIndex", p.get("chunkIndex", 0))
-        score = float(point.score or 0.0)
+        src = list(retrieval_source or [])
         return cls(
             source_id=p.get("sourceId", ""),
             source_type=p.get("sourceType", "document"),
-            chunk_id=p.get("chunkId", str(point.id)),
+            chunk_id=p.get("chunkId", ""),
             title=p.get("title", ""),
             url=p.get("url", ""),
             text=p.get("text", ""),
             chunk_index=int(p.get("chunkIndex", 0)),
-            score=score,
+            score=float(score or 0.0),
             metadata=meta,
-            retrieval_source=["vector"],
-            vector_score=score,
+            retrieval_source=src,
+            vector_score=float(score or 0.0) if "vector" in src else 0.0,
             keyword_score=0.0,
         )
 

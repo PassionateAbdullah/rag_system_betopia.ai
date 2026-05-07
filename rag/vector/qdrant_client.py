@@ -107,6 +107,64 @@ class QdrantStore:
         )
         return [RetrievedChunk.from_qdrant_point(p) for p in response.points]
 
+    def scroll_chunks(
+        self,
+        *,
+        workspace_id: str | None = None,
+        source_types: list[str] | None = None,
+        document_ids: list[str] | None = None,
+        limit: int = 5000,
+        batch_size: int = 256,
+    ) -> list[RetrievedChunk]:
+        """Read payload chunks for local lexical scoring.
+
+        This is the no-Postgres hybrid leg. It deliberately scans a bounded
+        number of Qdrant payloads, so it is appropriate for MVP/small corpora.
+        Larger deployments should keep using a dedicated lexical index.
+        """
+        must: list[qm.FieldCondition] = []
+        if workspace_id:
+            must.append(
+                qm.FieldCondition(key="workspaceId", match=qm.MatchValue(value=workspace_id))
+            )
+        if source_types:
+            must.append(
+                qm.FieldCondition(key="sourceType", match=qm.MatchAny(any=list(source_types)))
+            )
+        if document_ids:
+            must.append(
+                qm.FieldCondition(key="sourceId", match=qm.MatchAny(any=list(document_ids)))
+            )
+        scroll_filter = qm.Filter(must=must) if must else None
+
+        out: list[RetrievedChunk] = []
+        offset = None
+        remaining = max(0, int(limit))
+        while remaining > 0:
+            page_limit = min(batch_size, remaining)
+            points, offset = self._client.scroll(
+                collection_name=self.collection,
+                scroll_filter=scroll_filter,
+                limit=page_limit,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            for point in points:
+                payload = dict(point.payload or {})
+                payload.setdefault("chunkId", str(point.id))
+                out.append(
+                    RetrievedChunk.from_payload(
+                        payload,
+                        score=0.0,
+                        retrieval_source=["keyword"],
+                    )
+                )
+            if offset is None or not points:
+                break
+            remaining = limit - len(out)
+        return out
+
     def delete_by_source_id(self, source_id: str) -> int:
         """Delete all points for a given sourceId (== documentId in our model)."""
         try:

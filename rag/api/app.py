@@ -270,7 +270,7 @@ def build_app() -> FastAPI:
             collection=cfg.qdrant_collection,
             reranker=cfg.reranker_provider,
             compression=cfg.compression_provider,
-            hybrid=bool(pg is not None and cfg.enable_hybrid_retrieval),
+            hybrid=bool(cfg.enable_hybrid_retrieval),
         )
 
     @app.get("/v1/info", response_model=InfoResponse, dependencies=[Depends(require_api_key)])

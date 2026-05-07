@@ -79,6 +79,25 @@ def test_context_for_agent_compresses_to_query_relevant_text():
     assert ctx["sectionTitle"] == "4. System Vision"
 
 
+def test_context_for_agent_can_use_hierarchical_parent_text():
+    rc = _retrieved(
+        "c1",
+        text="The local child mentions pricing.",
+        section_title="Pricing",
+        score=0.8,
+    )
+    rc.metadata["parentText"] = "Parent context explains pricing tiers and enterprise discounts."
+    pkg = build_evidence_package(
+        original_query="enterprise discounts",
+        rewritten_query="enterprise discounts",
+        reranked=[_rr(rc, 0.85)],
+        selected=[_rr(rc, 0.85)],
+        retrieval_trace={},
+    )
+    ctx = pkg.to_dict()["context_for_agent"][0]
+    assert "enterprise discounts" in ctx["text"].lower()
+
+
 def test_evidence_includes_rerank_signals_and_section_title():
     rc = _retrieved("c1", score=0.7)
     pkg = build_evidence_package(

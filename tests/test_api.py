@@ -92,6 +92,41 @@ class FakeStore:
             )
         return results[:top_k]
 
+    def scroll_chunks(
+        self,
+        *,
+        workspace_id: str | None = None,
+        source_types: list[str] | None = None,
+        document_ids: list[str] | None = None,
+        limit: int = 5000,
+        batch_size: int = 256,
+    ) -> list[RetrievedChunk]:
+        out: list[RetrievedChunk] = []
+        for c in self._chunks:
+            if workspace_id and c.workspace_id != workspace_id:
+                continue
+            if source_types and c.source_type not in source_types:
+                continue
+            if document_ids and c.source_id not in document_ids:
+                continue
+            out.append(
+                RetrievedChunk(
+                    source_id=c.source_id,
+                    source_type=c.source_type,
+                    chunk_id=c.chunk_id,
+                    title=c.title,
+                    url=c.url,
+                    text=c.text,
+                    chunk_index=c.chunk_index,
+                    score=0.0,
+                    metadata=dict(c.metadata),
+                    retrieval_source=["keyword"],
+                )
+            )
+            if len(out) >= limit:
+                break
+        return out
+
     def info(self) -> dict[str, Any]:
         return {
             "collection": self.collection,

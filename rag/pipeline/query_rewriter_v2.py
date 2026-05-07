@@ -106,10 +106,12 @@ def rewrite(
 
     semantic_primary = cleaned.rewritten_query
     semantic_queries: list[str] = [semantic_primary]
+    if keyword_query and keyword_query.lower() != semantic_primary.lower():
+        semantic_queries.append(keyword_query)
     if understanding is not None and understanding.needs_multi_hop:
         # For multi-hop queries, also pass an expanded variant.
         expanded = _expand_abbreviations(semantic_primary)
-        if expanded != semantic_primary:
+        if expanded != semantic_primary and expanded not in semantic_queries:
             semantic_queries.append(expanded)
 
     rq = RewrittenQuery(

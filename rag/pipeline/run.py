@@ -18,6 +18,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from rag.compression import build_compressor
+from rag.compression.noop import NoopCompressor
 from rag.config import Config, load_config
 from rag.embeddings.base import EmbeddingProvider
 from rag.embeddings.default_provider import build_embedding_provider
@@ -36,7 +37,11 @@ from rag.pipeline.source_router import plan as plan_routes
 from rag.reranking import build_reranker
 from rag.reranking.base import RerankedChunk
 from rag.retrieval.hybrid import hybrid_retrieve
-from rag.retrieval.keyword import KeywordBackend, PostgresKeywordBackend
+from rag.retrieval.keyword import (
+    KeywordBackend,
+    PostgresKeywordBackend,
+    QdrantKeywordBackend,
+)
 from rag.storage import build_postgres_store
 from rag.types import EvidencePackage, RagInput
 from rag.vector.qdrant_client import QdrantStore
@@ -74,6 +79,8 @@ def run_rag_tool(
     kbe = keyword_backend
     if kbe is None and pg is not None:
         kbe = PostgresKeywordBackend(pg)
+    elif kbe is None:
+        kbe = QdrantKeywordBackend(s, scan_limit=cfg.qdrant_keyword_scan_limit)
 
     timings: dict[str, float] = {}
     t_total = time.perf_counter()
@@ -98,7 +105,7 @@ def run_rag_tool(
         cfg=cfg, filters=rag_input.filters, understanding=understanding
     )
     if kbe is None:
-        # Postgres unavailable → vector only, regardless of plan request.
+        # No lexical backend available → vector only, regardless of plan request.
         search_plan.use_keyword = False
     timings["sourceRouting"] = (time.perf_counter() - t0) * 1000.0
 
@@ -169,7 +176,7 @@ def run_rag_tool(
 
     # ---------- 9. context compression ----------
     t0 = time.perf_counter()
-    compressor = build_compressor(cfg) if cfg.enable_context_compression else None
+    compressor = build_compressor(cfg) if cfg.enable_context_compression else NoopCompressor()
     timings["compressionInit"] = (time.perf_counter() - t0) * 1000.0
 
     # ---------- 10. evidence packaging ----------
@@ -226,8 +233,9 @@ def run_rag_tool(
         "embeddingModel": emb.model_name,
         "vectorDim": emb.dim,
         "qdrantCollection": cfg.qdrant_collection,
+        "keywordBackend": kbe.__class__.__name__ if kbe is not None else None,
         "rerankerProvider": getattr(reranker, "name", "unknown"),
-        "compressionProvider": cfg.compression_provider,
+        "compressionProvider": getattr(compressor, "name", cfg.compression_provider),
         "postgresEnabled": pg is not None,
     }
 
