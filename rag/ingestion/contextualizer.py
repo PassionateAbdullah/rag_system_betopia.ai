@@ -33,7 +33,7 @@ from pathlib import Path
 
 import httpx
 
-from rag.config import Config
+from rag.config import Config, resolve_chat_creds
 from rag.types import Chunk
 
 logger = logging.getLogger("rag.ingestion.contextualizer")
@@ -257,15 +257,29 @@ class Contextualizer:
 
 
 def build_contextualizer(cfg: Config) -> Contextualizer | None:
-    """Returns a configured Contextualizer, or None if disabled / not configured."""
+    """Returns a configured Contextualizer, or None if disabled / not configured.
+
+    Resolution chain via :func:`rag.config.resolve_chat_creds`:
+        1. CONTEXTUALIZER_BASE_URL / _API_KEY / _MODEL  (per-stage overrides)
+        2. OPENAI_BASE_URL / _API_KEY / _MODEL          (canonical)
+        3. QUERY_REWRITER_BASE_URL / _API_KEY / _MODEL  (legacy reuse)
+
+    Returns None when no api_key is resolved (avoids a guaranteed-fail call).
+    """
     if not cfg.enable_contextual_retrieval:
         return None
-    if not cfg.contextualizer_base_url or not cfg.contextualizer_model:
-        return None
-    return Contextualizer(
+    base_url, api_key, model = resolve_chat_creds(
+        cfg,
         base_url=cfg.contextualizer_base_url,
         api_key=cfg.contextualizer_api_key,
         model=cfg.contextualizer_model,
+    )
+    if not base_url or not model or not api_key:
+        return None
+    return Contextualizer(
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
         timeout=cfg.contextualizer_timeout,
         concurrency=cfg.contextualizer_concurrency,
         doc_excerpt_chars=cfg.contextualizer_doc_excerpt_chars,
