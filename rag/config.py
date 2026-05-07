@@ -97,6 +97,15 @@ class Config:
     compression_base_url: str = ""
     compression_timeout: float = 15.0
 
+    # Contextual retrieval (Anthropic-style chunk preamble at embed time)
+    contextualizer_model: str = ""
+    contextualizer_api_key: str = ""
+    contextualizer_base_url: str = ""
+    contextualizer_timeout: float = 20.0
+    contextualizer_concurrency: int = 8
+    contextualizer_doc_excerpt_chars: int = 2400
+    contextualizer_cache_dir: str = ".cache/contextualizer"
+
     # Feature flags
     enable_query_rewrite: bool = True
     enable_query_understanding: bool = True
@@ -104,6 +113,7 @@ class Config:
     enable_adaptive_chunking: bool = True
     enable_candidate_expansion: bool = False
     enable_context_compression: bool = True
+    enable_contextual_retrieval: bool = False
     enable_debug_logging: bool = False
     enable_eval_log: bool = False
     eval_log_path: str = "logs/eval.jsonl"
@@ -165,12 +175,20 @@ def load_config() -> Config:
         compression_api_key=_env_str("COMPRESSION_API_KEY"),
         compression_base_url=_env_str("COMPRESSION_BASE_URL"),
         compression_timeout=_env_float("COMPRESSION_TIMEOUT", 15.0),
+        contextualizer_model=_env_str("CONTEXTUALIZER_MODEL"),
+        contextualizer_api_key=_env_str("CONTEXTUALIZER_API_KEY"),
+        contextualizer_base_url=_env_str("CONTEXTUALIZER_BASE_URL"),
+        contextualizer_timeout=_env_float("CONTEXTUALIZER_TIMEOUT", 20.0),
+        contextualizer_concurrency=_env_int("CONTEXTUALIZER_CONCURRENCY", 8),
+        contextualizer_doc_excerpt_chars=_env_int("CONTEXTUALIZER_DOC_EXCERPT_CHARS", 2400),
+        contextualizer_cache_dir=_env_str("CONTEXTUALIZER_CACHE_DIR", ".cache/contextualizer"),
         enable_query_rewrite=_env_bool("ENABLE_QUERY_REWRITE", True),
         enable_query_understanding=_env_bool("ENABLE_QUERY_UNDERSTANDING", True),
         enable_hybrid_retrieval=_env_bool("ENABLE_HYBRID_RETRIEVAL", True),
         enable_adaptive_chunking=_env_bool("ENABLE_ADAPTIVE_CHUNKING", True),
         enable_candidate_expansion=_env_bool("ENABLE_CANDIDATE_EXPANSION", False),
         enable_context_compression=_env_bool("ENABLE_CONTEXT_COMPRESSION", True),
+        enable_contextual_retrieval=_env_bool("ENABLE_CONTEXTUAL_RETRIEVAL", False),
         enable_debug_logging=_env_bool("ENABLE_DEBUG_LOGGING", False),
         enable_eval_log=_env_bool("ENABLE_EVAL_LOG", False),
         eval_log_path=_env_str("EVAL_LOG_PATH", "logs/eval.jsonl"),

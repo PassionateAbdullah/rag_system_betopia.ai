@@ -24,6 +24,10 @@ from rag.embeddings.default_provider import build_embedding_provider
 from rag.errors import IngestionError
 from rag.ingestion.chunk_strategy import choose_chunker
 from rag.ingestion.chunker import chunk_with_sections
+from rag.ingestion.contextualizer import (
+    apply_contextual_preambles,
+    build_contextualizer,
+)
 from rag.ingestion.file_loader import detect_file_type, extract_text, is_supported
 from rag.ingestion.hierarchical_chunker import chunk_with_sections_hierarchical
 from rag.ingestion.semantic_chunker import chunk_with_sections_semantic
@@ -171,6 +175,34 @@ def ingest_uploaded_file(
         vector_size=emb.dim,
     )
 
+    # --- stage: contextualize (optional, embed-time preamble) ---
+    # Mutates chunk metadata in place; returns parallel embed-text list.
+    embed_texts: list[str] = [c.text for c in chunks]
+    contextualizer = build_contextualizer(cfg)
+    contextualized_count = 0
+    contextualized_cache_hits = 0
+    contextualized_failures = 0
+    if contextualizer is not None:
+        try:
+            results = contextualizer.contextualize(
+                doc_text=raw_text,
+                chunks=chunks,
+                workspace_id=payload.workspace_id,
+            )
+            embed_texts = apply_contextual_preambles(chunks, results)
+            for r in results:
+                if r.preamble and r.source == "llm":
+                    contextualized_count += 1
+                elif r.preamble and r.source == "cache":
+                    contextualized_cache_hits += 1
+                elif r.error:
+                    contextualized_failures += 1
+        except Exception as e:
+            # Hard failure inside the contextualizer must not block ingestion.
+            for c in chunks:
+                c.metadata.setdefault("contextError", f"{type(e).__name__}: {e}")
+            embed_texts = [c.text for c in chunks]
+
     # Prefer caller-supplied PostgresStore; otherwise auto-build from config.
     pg = postgres if postgres is not None else build_postgres_store(cfg)
 
@@ -227,9 +259,9 @@ def ingest_uploaded_file(
             self.stage = stage
             self.cause = cause
 
-    def _embed_then_upsert(batch_chunks: list[Chunk]) -> None:
+    def _embed_then_upsert(batch_chunks: list[Chunk], batch_embed_texts: list[str]) -> None:
         try:
-            vectors = emb.embed([c.text for c in batch_chunks])
+            vectors = emb.embed(batch_embed_texts)
         except Exception as e:
             raise _StagedError("embed", e) from e
         try:
@@ -244,7 +276,8 @@ def ingest_uploaded_file(
     with cf.ThreadPoolExecutor(max_workers=inflight_cap) as pool:
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i : i + batch_size]
-            pending.append(pool.submit(_embed_then_upsert, batch))
+            batch_texts = embed_texts[i : i + batch_size]
+            pending.append(pool.submit(_embed_then_upsert, batch, batch_texts))
             while len(pending) >= inflight_cap:
                 done = pending.pop(0)
                 try:
@@ -278,7 +311,7 @@ def ingest_uploaded_file(
             cause=last_error,
         ) from last_error
 
-    return IngestionResult(
+    result = IngestionResult(
         source_id=source_id,
         document_id=document_id,
         workspace_id=payload.workspace_id,
@@ -288,6 +321,11 @@ def ingest_uploaded_file(
         postgres_written=pg is not None,
         status="success",
     )
+    if contextualizer is not None:
+        result.contextualized_chunks = contextualized_count
+        result.contextualized_cache_hits = contextualized_cache_hits
+        result.contextualized_failures = contextualized_failures
+    return result
 
 
 def delete_document(

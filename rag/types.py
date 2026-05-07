@@ -187,9 +187,12 @@ class IngestionResult:
     status: str = "success"
     document_id: str | None = None
     postgres_written: bool = False
+    contextualized_chunks: int = 0
+    contextualized_cache_hits: int = 0
+    contextualized_failures: int = 0
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "sourceId": self.source_id,
             "documentId": self.document_id,
             "workspaceId": self.workspace_id,
@@ -199,6 +202,17 @@ class IngestionResult:
             "postgresWritten": self.postgres_written,
             "status": self.status,
         }
+        if (
+            self.contextualized_chunks
+            or self.contextualized_cache_hits
+            or self.contextualized_failures
+        ):
+            out["contextualization"] = {
+                "llmGenerated": self.contextualized_chunks,
+                "cacheHits": self.contextualized_cache_hits,
+                "failures": self.contextualized_failures,
+            }
+        return out
 
 
 # --------------------------------------------------------------------------- #

@@ -1,0 +1,52 @@
+# Long-document golden set — 30 questions derived from the ML/AI history
+# book that triggered the original "learning from mistakes" miss
+# (see docs/PRODUCTION_GAPS_AND_ROADMAP.md §1).
+#
+# These items are designed to stress contextual retrieval:
+# every question is one a vector embedding alone tends to lose because
+# the chunk lacks orienting context (chapter title, period, named scientist).
+# Anthropic's contextual-retrieval technique should show its biggest lift
+# precisely on this kind of long-narrative corpus.
+#
+# How to use:
+#   1. Ingest the book into workspace_id="book" with
+#        CHUNKER=semantic (or auto)
+#        ENABLE_CONTEXTUAL_RETRIEVAL=false
+#      Run:  python -m rag.eval data/eval/golden_long_doc.jsonl
+#   2. Re-ingest with ENABLE_CONTEXTUAL_RETRIEVAL=true and the Haiku-class
+#      endpoint configured. Run the same eval. Compare hit@k / MRR.
+#
+# Schema matches data/eval/golden.jsonl. Update expectedSubstrings to
+# match the verbatim wording in your copy of the book — current values
+# are common phrasings that work for most ML history texts.
+#
+{"id": "ml-book-learning-from-mistakes-chapter", "query": "what is learning from mistakes and how does it improve a model", "workspaceId": "book", "expectedSubstrings": ["error correction", "perceptron"], "tags": ["long-doc", "context-retrieval", "concept"], "notes": "Original miss case from the production-gaps doc."}
+{"id": "ml-book-perceptron-update-rule", "query": "how does the perceptron update its weights after a misclassification", "workspaceId": "book", "expectedSubstrings": ["weight update", "perceptron", "error"], "tags": ["long-doc", "context-retrieval", "algorithm"], "notes": ""}
+{"id": "ml-book-gradient-descent-derivation", "query": "how is gradient descent derived from squared error loss", "workspaceId": "book", "expectedSubstrings": ["gradient descent", "squared error"], "tags": ["long-doc", "context-retrieval", "math"], "notes": ""}
+{"id": "ml-book-bias-variance-tradeoff", "query": "what is the bias-variance tradeoff and why does model complexity matter", "workspaceId": "book", "expectedSubstrings": ["bias", "variance", "tradeoff"], "tags": ["long-doc", "context-retrieval", "concept"], "notes": ""}
+{"id": "ml-book-test-vs-training-error", "query": "why does training error decrease while test error rises", "workspaceId": "book", "expectedSubstrings": ["training error", "test error", "overfit"], "tags": ["long-doc", "context-retrieval", "concept"], "notes": ""}
+{"id": "ml-book-rosenblatt-mark-i", "query": "what was the Mark I Perceptron and what could it do", "workspaceId": "book", "expectedSubstrings": ["Mark I", "Perceptron", "Rosenblatt"], "tags": ["long-doc", "context-retrieval", "history"], "notes": "Disambiguation: 'Mark I' is generic without chapter context."}
+{"id": "ml-book-mcculloch-pitts-neuron", "query": "what model did McCulloch and Pitts propose for the neuron", "workspaceId": "book", "expectedSubstrings": ["McCulloch", "Pitts", "neuron"], "tags": ["long-doc", "context-retrieval", "history"], "notes": ""}
+{"id": "ml-book-widrow-hoff-rule", "query": "what is the Widrow-Hoff learning rule", "workspaceId": "book", "expectedSubstrings": ["Widrow", "Hoff", "least mean"], "tags": ["long-doc", "context-retrieval", "algorithm"], "notes": ""}
+{"id": "ml-book-minsky-papert-critique", "query": "what did Minsky and Papert prove about single-layer perceptrons", "workspaceId": "book", "expectedSubstrings": ["Minsky", "Papert", "XOR"], "tags": ["long-doc", "context-retrieval", "history"], "notes": ""}
+{"id": "ml-book-ai-winter", "query": "what caused the first AI winter in the 1970s", "workspaceId": "book", "expectedSubstrings": ["AI winter", "funding"], "tags": ["long-doc", "context-retrieval", "history"], "notes": ""}
+{"id": "ml-book-backpropagation-rediscovery", "query": "how was backpropagation rediscovered and popularised in the 1980s", "workspaceId": "book", "expectedSubstrings": ["backpropagation", "Rumelhart", "Hinton"], "tags": ["long-doc", "context-retrieval", "history"], "notes": ""}
+{"id": "ml-book-1787-narrative-disambiguation", "query": "what historical event from 1787 is mentioned in the chapter on early statistical thought", "workspaceId": "book", "expectedSubstrings": ["1787"], "tags": ["long-doc", "context-retrieval", "narrative"], "notes": "Tests the chapter-heading regex fix (1787 was wrongly matched as a heading before)."}
+{"id": "ml-book-statistical-learning-vs-symbolic", "query": "how does statistical learning differ from symbolic AI", "workspaceId": "book", "expectedSubstrings": ["statistical", "symbolic"], "tags": ["long-doc", "context-retrieval", "concept"], "notes": ""}
+{"id": "ml-book-vapnik-chervonenkis", "query": "what is the VC dimension and why does it bound generalisation", "workspaceId": "book", "expectedSubstrings": ["VC dimension", "Vapnik"], "tags": ["long-doc", "context-retrieval", "math"], "notes": ""}
+{"id": "ml-book-cross-validation", "query": "why does k-fold cross-validation give a better generalisation estimate", "workspaceId": "book", "expectedSubstrings": ["cross-validation", "k-fold"], "tags": ["long-doc", "context-retrieval", "method"], "notes": ""}
+{"id": "ml-book-regularization-intuition", "query": "what is regularisation and how does it reduce variance", "workspaceId": "book", "expectedSubstrings": ["regularisation", "variance"], "tags": ["long-doc", "context-retrieval", "concept"], "notes": ""}
+{"id": "ml-book-no-free-lunch", "query": "what does the no-free-lunch theorem say about learning algorithms", "workspaceId": "book", "expectedSubstrings": ["no free lunch", "theorem"], "tags": ["long-doc", "context-retrieval", "theory"], "notes": ""}
+{"id": "ml-book-bayesian-vs-frequentist", "query": "how does the Bayesian view of learning differ from the frequentist one", "workspaceId": "book", "expectedSubstrings": ["Bayesian", "frequentist", "prior"], "tags": ["long-doc", "context-retrieval", "concept"], "notes": ""}
+{"id": "ml-book-svm-margin", "query": "why does an SVM maximise the margin between classes", "workspaceId": "book", "expectedSubstrings": ["margin", "support vector"], "tags": ["long-doc", "context-retrieval", "algorithm"], "notes": ""}
+{"id": "ml-book-kernel-trick", "query": "how does the kernel trick let linear models solve non-linear problems", "workspaceId": "book", "expectedSubstrings": ["kernel", "non-linear"], "tags": ["long-doc", "context-retrieval", "algorithm"], "notes": ""}
+{"id": "ml-book-deep-learning-resurgence", "query": "what factors drove the deep learning resurgence after 2006", "workspaceId": "book", "expectedSubstrings": ["deep learning", "GPU", "data"], "tags": ["long-doc", "context-retrieval", "history"], "notes": ""}
+{"id": "ml-book-hinton-dropout", "query": "what is dropout and what problem does it address in deep networks", "workspaceId": "book", "expectedSubstrings": ["dropout", "overfit"], "tags": ["long-doc", "context-retrieval", "method"], "notes": ""}
+{"id": "ml-book-cnn-convolution-locality", "query": "why do convolutional networks exploit locality in image data", "workspaceId": "book", "expectedSubstrings": ["convolution", "locality", "translation"], "tags": ["long-doc", "context-retrieval", "architecture"], "notes": ""}
+{"id": "ml-book-rnn-vanishing-gradient", "query": "what is the vanishing gradient problem in recurrent networks", "workspaceId": "book", "expectedSubstrings": ["vanishing gradient", "recurrent"], "tags": ["long-doc", "context-retrieval", "concept"], "notes": ""}
+{"id": "ml-book-attention-transformer", "query": "what does the attention mechanism compute in a transformer", "workspaceId": "book", "expectedSubstrings": ["attention", "query", "key"], "tags": ["long-doc", "context-retrieval", "architecture"], "notes": ""}
+{"id": "ml-book-transfer-learning-finetune", "query": "why does pretraining followed by fine-tuning generalise to new tasks", "workspaceId": "book", "expectedSubstrings": ["pretraining", "fine-tuning"], "tags": ["long-doc", "context-retrieval", "method"], "notes": ""}
+{"id": "ml-book-chapter-numbered-disambiguation", "query": "what does chapter 4 cover about model evaluation", "workspaceId": "book", "expectedSubstrings": ["evaluation"], "tags": ["long-doc", "context-retrieval", "structure"], "notes": "Tests chapter-number resolution where word chunker would lose order."}
+{"id": "ml-book-data-as-supervision", "query": "what does the author mean by data as supervision", "workspaceId": "book", "expectedSubstrings": ["supervision", "data"], "tags": ["long-doc", "context-retrieval", "concept"], "notes": ""}
+{"id": "ml-book-model-capacity-defined", "query": "how does the book define model capacity", "workspaceId": "book", "expectedSubstrings": ["capacity"], "tags": ["long-doc", "context-retrieval", "definition"], "notes": ""}
+{"id": "ml-book-future-of-learning", "query": "what does the closing chapter speculate about the future of machine learning", "workspaceId": "book", "expectedSubstrings": ["future"], "tags": ["long-doc", "context-retrieval", "narrative"], "notes": "Closing-chapter Qs benefit most from contextual retrieval."}

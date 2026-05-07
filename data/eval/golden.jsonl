@@ -18,3 +18,11 @@
 {"id": "dengue-monthly-table-aug", "query": "august 2023 dengue cases bangladesh", "workspaceId": "default", "expectedSubstrings": ["71,976", "Aug"], "tags": ["numeric", "table", "months"], "notes": ""}
 {"id": "dengue-2025-deaths", "query": "how many dengue deaths in bangladesh 2025", "workspaceId": "default", "expectedSubstrings": ["413 deaths", "102,861"], "tags": ["numeric", "year"], "notes": ""}
 {"id": "dengue-preparedness-window", "query": "when should dengue preparedness extend in bangladesh", "workspaceId": "default", "expectedSubstrings": ["post-monsoon", "preparedness window"], "tags": ["concept"], "notes": ""}
+# --- Contextual-retrieval probes: queries whose chunks lack orienting
+# --- context unless an LLM-generated preamble is prepended at embed time.
+# --- Use these to A/B ENABLE_CONTEXTUAL_RETRIEVAL=false vs true.
+{"id": "dengue-context-this-year-2024", "query": "how bad was the outbreak this year", "workspaceId": "default", "expectedSubstrings": ["2024", "101,214"], "tags": ["context-retrieval", "underspecified"], "notes": "Vague 'this year' — needs preamble that ties chunk to its 2024 section."}
+{"id": "dengue-context-table-row-only", "query": "what was the case count that month", "workspaceId": "default", "expectedSubstrings": ["79,598"], "tags": ["context-retrieval", "table", "anaphora"], "notes": "Bare table-row chunk benefits from preamble naming the month."}
+{"id": "dengue-context-research-priority-vague", "query": "what should be done next", "workspaceId": "default", "expectedSubstrings": ["genomic surveillance", "mortality audits"], "tags": ["context-retrieval", "vague"], "notes": "Action-oriented, no entity in query — preamble carries 'dengue research priorities'."}
+{"id": "dengue-context-section-anaphora", "query": "explain the inflection point", "workspaceId": "default", "expectedSubstrings": ["inflection point", "321,179"], "tags": ["context-retrieval", "anaphora"], "notes": "Without preamble, 'inflection point' alone hits non-bangladesh chunks."}
+{"id": "dengue-context-which-country", "query": "what country had a dengue outbreak this period", "workspaceId": "default", "expectedSubstrings": ["Bangladesh"], "tags": ["context-retrieval", "underspecified"], "notes": ""}
