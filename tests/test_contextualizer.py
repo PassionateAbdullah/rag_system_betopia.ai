@@ -151,6 +151,72 @@ def test_build_returns_instance_when_configured():
     assert inst.model_name == "haiku"
 
 
+def test_build_falls_back_to_openai_creds():
+    """No CONTEXTUALIZER_* set -> resolve via OPENAI_* canonical pair."""
+    cfg = Config(
+        enable_contextual_retrieval=True,
+        contextualizer_base_url="",
+        contextualizer_model="",
+        contextualizer_api_key="",
+        openai_api_key="sk-test",
+        openai_base_url="https://api.openai.com/v1",
+        openai_model="gpt-4o-mini",
+        contextualizer_cache_dir="",
+    )
+    inst = build_contextualizer(cfg)
+    assert isinstance(inst, Contextualizer)
+    assert inst.model_name == "gpt-4o-mini"
+
+
+def test_build_falls_back_to_query_rewriter_creds():
+    """Legacy reuse: QUERY_REWRITER_* keeps an existing OpenAI key working
+    without forcing the operator to migrate to the OPENAI_* names."""
+    cfg = Config(
+        enable_contextual_retrieval=True,
+        contextualizer_base_url="",
+        contextualizer_model="",
+        contextualizer_api_key="",
+        openai_api_key="",
+        openai_base_url="",
+        openai_model="",
+        query_rewriter_base_url="https://api.openai.com/v1",
+        query_rewriter_api_key="sk-legacy",
+        query_rewriter_model="gpt-4o-mini",
+        contextualizer_cache_dir="",
+    )
+    inst = build_contextualizer(cfg)
+    assert isinstance(inst, Contextualizer)
+    assert inst._api_key == "sk-legacy"
+
+
+def test_build_returns_none_when_no_api_key_anywhere():
+    cfg = Config(
+        enable_contextual_retrieval=True,
+        contextualizer_base_url="https://api.example/v1",
+        contextualizer_model="haiku",
+        # api_key empty AND no openai_api_key
+    )
+    assert build_contextualizer(cfg) is None
+
+
+def test_build_per_stage_overrides_openai_default():
+    cfg = Config(
+        enable_contextual_retrieval=True,
+        contextualizer_base_url="https://stage.example/v1",
+        contextualizer_model="claude-haiku",
+        contextualizer_api_key="stage-key",
+        openai_api_key="openai-key",
+        openai_base_url="https://api.openai.com/v1",
+        openai_model="gpt-4o-mini",
+        contextualizer_cache_dir="",
+    )
+    inst = build_contextualizer(cfg)
+    assert isinstance(inst, Contextualizer)
+    assert inst.model_name == "claude-haiku"
+    assert inst._base_url == "https://stage.example/v1"
+    assert inst._api_key == "stage-key"
+
+
 def test_contextualize_calls_llm_and_caches(tmp_path, monkeypatch):
     fake = _FakeClient(response_text="Chapter 3 — perceptron error correction.")
     monkeypatch.setattr(ctxmod.httpx, "Client", lambda **kw: fake)
