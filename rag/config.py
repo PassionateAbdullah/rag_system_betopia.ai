@@ -47,6 +47,15 @@ class Config:
     # Postgres (optional — when unset, system runs in MVP/Qdrant-only mode)
     postgres_url: str = ""
 
+    # Generic OpenAI-compatible chat endpoint. Used as a fallback for any
+    # LLM-driven stage (contextualizer, rewriter, compressor) that hasn't
+    # set its own *_BASE_URL / *_API_KEY pair. Lets the operator point
+    # everything at one provider via two env vars and rotate keys in one
+    # place. Specific stage vars still override.
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_model: str = "gpt-4o-mini"
+
     # Embeddings
     embedding_provider: str = "sentence-transformers"
     embedding_model: str = "BAAI/bge-m3"
@@ -133,12 +142,52 @@ class Config:
     chunker: str = "auto"
 
 
+def resolve_chat_creds(
+    cfg: Config,
+    *,
+    base_url: str = "",
+    api_key: str = "",
+    model: str = "",
+) -> tuple[str, str, str]:
+    """Resolve (base_url, api_key, model) for any OpenAI-compatible LLM stage.
+
+    Priority:
+        1. Per-stage overrides passed in (CONTEXTUALIZER_*, COMPRESSION_*, ...)
+        2. Generic OPENAI_* — the canonical "set once, rotate once" knobs.
+        3. QUERY_REWRITER_* — already an OpenAI-compat chat config in this
+           codebase; reuse it so a key existing under that name keeps working
+           when the operator turns on additional LLM stages.
+
+    Returns ("", "", "") for any field that cannot be resolved. Callers that
+    require all three must check before instantiating.
+    """
+    resolved_base_url = (
+        base_url
+        or cfg.openai_base_url
+        or cfg.query_rewriter_base_url
+    )
+    resolved_api_key = (
+        api_key
+        or cfg.openai_api_key
+        or cfg.query_rewriter_api_key
+    )
+    resolved_model = (
+        model
+        or cfg.openai_model
+        or cfg.query_rewriter_model
+    )
+    return resolved_base_url, resolved_api_key, resolved_model
+
+
 def load_config() -> Config:
     return Config(
         qdrant_url=_env_str("QDRANT_URL", "http://localhost:6333"),
         qdrant_api_key=_env_str("QDRANT_API_KEY"),
         qdrant_collection=_env_str("QDRANT_COLLECTION", "betopia_rag_mvp"),
         postgres_url=_env_str("POSTGRES_URL"),
+        openai_api_key=_env_str("OPENAI_API_KEY"),
+        openai_base_url=_env_str("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        openai_model=_env_str("OPENAI_MODEL", "gpt-4o-mini"),
         embedding_provider=_env_str("EMBEDDING_PROVIDER", "sentence-transformers"),
         embedding_model=_env_str("EMBEDDING_MODEL", "BAAI/bge-m3"),
         embedding_api_key=_env_str("EMBEDDING_API_KEY"),
