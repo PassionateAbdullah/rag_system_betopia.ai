@@ -67,6 +67,7 @@ class Config:
     vector_top_k: int = 30
     merged_candidate_limit: int = 50
     rerank_top_k: int = 20
+    qdrant_keyword_scan_limit: int = 5000
 
     # API server
     api_host: str = "0.0.0.0"
@@ -100,6 +101,7 @@ class Config:
     enable_query_rewrite: bool = True
     enable_query_understanding: bool = True
     enable_hybrid_retrieval: bool = True
+    enable_adaptive_chunking: bool = True
     enable_candidate_expansion: bool = False
     enable_context_compression: bool = True
     enable_debug_logging: bool = False
@@ -115,10 +117,10 @@ class Config:
     # "markitdown" (force markitdown — best heading preservation, slow).
     pdf_loader: str = "auto"
 
-    # Chunker: "word" (default — fixed window, deterministic, no embed cost),
+    # Chunker: "auto" (default — choose per document), "word" (fixed window),
     # "semantic" (sentence-embed, cosine-drop boundaries, recall ↑),
     # "hierarchical" (small child for retrieval + big parent context).
-    chunker: str = "word"
+    chunker: str = "auto"
 
 
 def load_config() -> Config:
@@ -142,6 +144,7 @@ def load_config() -> Config:
         vector_top_k=_env_int("DEFAULT_VECTOR_TOP_K", 30),
         merged_candidate_limit=_env_int("DEFAULT_MERGED_CANDIDATE_LIMIT", 50),
         rerank_top_k=_env_int("DEFAULT_RERANK_TOP_K", 20),
+        qdrant_keyword_scan_limit=_env_int("QDRANT_KEYWORD_SCAN_LIMIT", 5000),
         api_host=_env_str("RAG_API_HOST", "0.0.0.0"),
         api_port=_env_int("RAG_API_PORT", 8080),
         api_key=_env_str("RAG_API_KEY"),
@@ -165,6 +168,7 @@ def load_config() -> Config:
         enable_query_rewrite=_env_bool("ENABLE_QUERY_REWRITE", True),
         enable_query_understanding=_env_bool("ENABLE_QUERY_UNDERSTANDING", True),
         enable_hybrid_retrieval=_env_bool("ENABLE_HYBRID_RETRIEVAL", True),
+        enable_adaptive_chunking=_env_bool("ENABLE_ADAPTIVE_CHUNKING", True),
         enable_candidate_expansion=_env_bool("ENABLE_CANDIDATE_EXPANSION", False),
         enable_context_compression=_env_bool("ENABLE_CONTEXT_COMPRESSION", True),
         enable_debug_logging=_env_bool("ENABLE_DEBUG_LOGGING", False),
@@ -173,5 +177,5 @@ def load_config() -> Config:
         neighbor_chunk_window=_env_int("NEIGHBOR_CHUNK_WINDOW", 1),
         include_parent_section=_env_bool("INCLUDE_PARENT_SECTION", True),
         pdf_loader=_env_str("PDF_LOADER", "auto").lower(),
-        chunker=_env_str("CHUNKER", "word").lower(),
+        chunker=_env_str("CHUNKER", "auto").lower(),
     )

@@ -122,6 +122,8 @@ class SectionChunk:
     text: str
     section_title: str | None
     section_index: int  # ordinal of section in the doc
+    parent_text: str | None = None
+    parent_chunk_id: str | None = None
 
 
 def chunk_text(

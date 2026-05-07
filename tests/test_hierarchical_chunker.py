@@ -11,8 +11,10 @@ def test_returns_child_with_parent_context():
         child_overlap=30,
     )
     assert out
-    # Children get the [parent] block appended (when parent differs).
-    assert any("[parent]" in c.text for c in out)
+    # Children keep retrieval text focused; parent context travels separately.
+    with_parent = [c for c in out if c.parent_text]
+    assert with_parent
+    assert all("[parent]" not in c.text for c in with_parent)
     # Section title preserved.
     assert all(c.section_title == "Section A" for c in out)
 
@@ -20,9 +22,9 @@ def test_returns_child_with_parent_context():
 def test_small_section_returns_no_parent_glue():
     text = "# A\n\nshort body here."
     out = chunk_with_sections_hierarchical(text)
-    # No "[parent]" glue when parent equals child (degenerate).
+    # No parent context when parent equals child (degenerate).
     for c in out:
-        assert "[parent]" not in c.text
+        assert c.parent_text is None
 
 
 def test_empty_input():

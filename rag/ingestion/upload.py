@@ -22,6 +22,7 @@ from rag.config import Config, load_config
 from rag.embeddings.base import EmbeddingProvider
 from rag.embeddings.default_provider import build_embedding_provider
 from rag.errors import IngestionError
+from rag.ingestion.chunk_strategy import choose_chunker
 from rag.ingestion.chunker import chunk_with_sections
 from rag.ingestion.file_loader import detect_file_type, extract_text, is_supported
 from rag.ingestion.hierarchical_chunker import chunk_with_sections_hierarchical
@@ -103,16 +104,23 @@ def ingest_uploaded_file(
 
     # --- stage: chunk ---
     try:
-        chunker_kind = (cfg.chunker or "word").lower()
+        decision = choose_chunker(raw_text, file_type=file_type, cfg=cfg)
+        chunker_kind = decision.kind
         if chunker_kind == "semantic":
             section_chunks = chunk_with_sections_semantic(raw_text, emb)
         elif chunker_kind == "hierarchical":
-            section_chunks = chunk_with_sections_hierarchical(raw_text)
+            section_chunks = chunk_with_sections_hierarchical(
+                raw_text,
+                parent_size=decision.parent_size,
+                parent_overlap=decision.parent_overlap,
+                child_size=decision.child_size,
+                child_overlap=decision.child_overlap,
+            )
         else:
             section_chunks = chunk_with_sections(
                 raw_text,
-                chunk_size=cfg.chunk_size,
-                overlap=cfg.chunk_overlap,
+                chunk_size=decision.chunk_size,
+                overlap=decision.overlap,
             )
     except Exception as e:
         raise IngestionError(
@@ -148,6 +156,10 @@ def ingest_uploaded_file(
                     "sectionTitle": sc.section_title,
                     "sectionIndex": sc.section_index,
                     "documentId": document_id,
+                    "chunker": chunker_kind,
+                    "chunkerReason": decision.reason,
+                    "parentText": sc.parent_text,
+                    "parentChunkId": sc.parent_chunk_id,
                 },
             )
         )

@@ -159,6 +159,28 @@ def test_optional_overrides_take_precedence(tmp_path):
     assert chunk.chunk_id == "custom_src_42:0"
 
 
+def test_adaptive_hierarchical_stores_parent_in_metadata(tmp_path):
+    body = "\n\n".join(
+        f"# Section {i}\n\n" + " ".join([f"topic{i}"] * 500)
+        for i in range(1, 6)
+    )
+    path = _write(tmp_path, "doc.md", body)
+    embedder, store = FakeEmbedder(), FakeStore()
+
+    result = ingest_uploaded_file(
+        IngestUploadInput(file_path=path, workspace_id="ws", user_id="u"),
+        config=_cfg(),
+        embedder=embedder,
+        store=store,
+    )
+
+    assert result.chunks_created > 1
+    parent_chunks = [c for c in store.upserted if c.metadata.get("parentText")]
+    assert parent_chunks
+    assert all("[parent]" not in c.text for c in parent_chunks)
+    assert parent_chunks[0].metadata["chunker"] == "hierarchical"
+
+
 def test_validate_missing_required_field_raises():
     with pytest.raises(ValueError):
         IngestUploadInput.from_dict({"workspaceId": "x", "userId": "y"})  # no filePath

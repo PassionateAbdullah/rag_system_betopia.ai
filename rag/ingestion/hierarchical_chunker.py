@@ -2,9 +2,9 @@
 
 Two-level chunking borrowed from the Anthropic / LlamaIndex playbooks:
 
-  parent  — coarse chunk (~1500 words). Stored on the chunk metadata as
-            ``parentText`` + ``parentChunkId``. Used at evidence time to
-            give the agent the wider context around a hit.
+  parent  — coarse chunk (~1500 words). Attached to the returned
+            ``SectionChunk`` as ``parent_text`` + ``parent_chunk_id``. Used at
+            evidence time to give the agent wider context around a hit.
   child   — fine chunk (~300 words). The retrieval unit. Embedded into
             Qdrant; matched by hybrid retrieval; reranked.
 
@@ -44,14 +44,11 @@ def chunk_with_sections_hierarchical(
     child_size: int = 300,
     child_overlap: int = 60,
 ) -> list[SectionChunk]:
-    """Produce *child* chunks (the retrieval unit) with parent context
-    attached via metadata-shaped fields. The text we embed is the child;
-    the parent text travels along on the chunk so the evidence builder
-    can present it to the agent.
+    """Produce *child* chunks (the retrieval unit) with parent context.
 
-    The function returns a list of ``SectionChunk`` whose ``text`` is the
-    child plus a ``\\n\\n[parent]\\n`` block. This keeps the existing
-    upload + storage path unchanged.
+    The returned ``text`` is only the child text. Parent context is attached as
+    side data so embeddings/reranking stay focused while the answer assembly
+    stage can still give the agent wider context.
     """
     parents = chunk_with_sections(text, chunk_size=parent_size, overlap=parent_overlap)
     children = chunk_with_sections(text, chunk_size=child_size, overlap=child_overlap)
@@ -61,15 +58,14 @@ def chunk_with_sections_hierarchical(
         if parent is None or parent.text == child.text:
             out.append(child)
             continue
-        # Glue parent context onto the child. Keep the child first so
-        # downstream sentence-level compression still finds query terms
-        # at the head, but expose the parent for the agent.
-        merged_text = child.text + "\n\n[parent]\n" + parent.text
+        parent_idx = next((i for i, p in enumerate(parents) if p is parent), 0)
         out.append(
             SectionChunk(
-                text=merged_text,
+                text=child.text,
                 section_title=child.section_title,
                 section_index=child.section_index,
+                parent_text=parent.text,
+                parent_chunk_id=f"parent:{parent.section_index}:{parent_idx}",
             )
         )
     return out
