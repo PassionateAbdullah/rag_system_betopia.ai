@@ -115,6 +115,17 @@ class Config:
     contextualizer_doc_excerpt_chars: int = 2400
     contextualizer_cache_dir: str = ".cache/contextualizer"
 
+    # Final synthesis — composes the answer string from the EvidencePackage.
+    # "passthrough" returns concatenated evidence (no LLM, default).
+    # "llm" calls an OpenAI-compat chat endpoint and produces an answer with
+    # numbered citation markers ([1], [2], ...) matching context_for_agent.
+    synthesis_provider: str = "passthrough"
+    synthesis_model: str = ""
+    synthesis_api_key: str = ""
+    synthesis_base_url: str = ""
+    synthesis_timeout: float = 30.0
+    synthesis_max_tokens: int = 800
+
     # Feature flags
     enable_query_rewrite: bool = True
     enable_query_understanding: bool = True
@@ -231,6 +242,12 @@ def load_config() -> Config:
         contextualizer_concurrency=_env_int("CONTEXTUALIZER_CONCURRENCY", 8),
         contextualizer_doc_excerpt_chars=_env_int("CONTEXTUALIZER_DOC_EXCERPT_CHARS", 2400),
         contextualizer_cache_dir=_env_str("CONTEXTUALIZER_CACHE_DIR", ".cache/contextualizer"),
+        synthesis_provider=_env_str("SYNTHESIS_PROVIDER", "passthrough").lower(),
+        synthesis_model=_env_str("SYNTHESIS_MODEL"),
+        synthesis_api_key=_env_str("SYNTHESIS_API_KEY"),
+        synthesis_base_url=_env_str("SYNTHESIS_BASE_URL"),
+        synthesis_timeout=_env_float("SYNTHESIS_TIMEOUT", 30.0),
+        synthesis_max_tokens=_env_int("SYNTHESIS_MAX_TOKENS", 800),
         enable_query_rewrite=_env_bool("ENABLE_QUERY_REWRITE", True),
         enable_query_understanding=_env_bool("ENABLE_QUERY_UNDERSTANDING", True),
         enable_hybrid_retrieval=_env_bool("ENABLE_HYBRID_RETRIEVAL", True),
