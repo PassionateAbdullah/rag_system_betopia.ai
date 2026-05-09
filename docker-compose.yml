@@ -27,8 +27,10 @@ services:
     environment:
       - OLLAMA_HOST=ollama:11434
     entrypoint: ["/bin/sh", "-c"]
+    # 0.5b — used by the rewriter (cheap noun-phrase extraction).
+    # 1.5b — used by the synthesiser (needs more reasoning headroom).
     command: |
-      "ollama pull qwen2.5:0.5b && echo 'qwen2.5:0.5b ready'"
+      "ollama pull qwen2.5:0.5b && ollama pull qwen2.5:1.5b && echo 'models ready'"
     restart: "no"
 
   qdrant:
