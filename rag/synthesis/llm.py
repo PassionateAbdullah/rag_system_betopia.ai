@@ -34,15 +34,34 @@ _SYSTEM_PROMPT = (
     "and a numbered list of evidence chunks. Your job is to write a concise, "
     "factual answer.\n\n"
     "Rules:\n"
-    "1. Cite every fact with `[N]` markers matching the chunk number. Multiple "
-    "markers for one fact are allowed: `[1][3]`.\n"
-    "2. Use ONLY the supplied evidence. Do not invent, infer, or rely on "
+    "1. EVERY factual claim MUST end with one or more [N] citation markers, "
+    "where N is the chunk number you took the fact from. Without [N] markers "
+    "the answer is invalid.\n"
+    "2. Multiple markers for one fact are allowed: `[1][3]`.\n"
+    "3. Use ONLY the supplied evidence. Do not invent, infer, or rely on "
     "outside knowledge.\n"
-    "3. If the evidence does not answer the query, say so explicitly.\n"
-    "4. Preserve numbers, dates, names, and quoted phrases verbatim.\n"
-    "5. Be terse. No filler, no preamble, no closing remarks.\n"
-    "6. Output plain text only. No markdown headers, no bullet lists unless "
+    "4. If the evidence does not answer the query, say so explicitly.\n"
+    "5. Preserve numbers, dates, names, and quoted phrases verbatim.\n"
+    "6. Be terse. No filler, no preamble, no closing remarks.\n"
+    "7. Output plain text only. No markdown headers, no bullet lists unless "
     "the question is itself a list."
+)
+
+# Single-shot example baked into the user role so small models (Qwen 1.5B,
+# llama3.2:1b) reliably emit [N] markers. Costs ~120 prompt tokens.
+_FEWSHOT_USER = (
+    "Query: who painted the Mona Lisa and when?\n"
+    "Must preserve verbatim: (none)\n\n"
+    "[1] art-history.md (Renaissance Masters)\n"
+    "The Mona Lisa is a half-length portrait painting by Italian artist "
+    "Leonardo da Vinci. It was painted between 1503 and 1519.\n\n"
+    "[2] louvre-guide.md (Famous Works)\n"
+    "The Mona Lisa hangs in the Louvre in Paris.\n\n"
+    "Write the answer now. Cite chunks with [N] markers."
+)
+_FEWSHOT_ASSISTANT = (
+    "Leonardo da Vinci painted the Mona Lisa between 1503 and 1519 [1]. "
+    "It hangs in the Louvre in Paris [2]."
 )
 
 _CITATION_RE = re.compile(r"\[(\d+)\]")
@@ -99,6 +118,8 @@ class LLMSynthesizer:
                         "model": self._model,
                         "messages": [
                             {"role": "system", "content": _SYSTEM_PROMPT},
+                            {"role": "user", "content": _FEWSHOT_USER},
+                            {"role": "assistant", "content": _FEWSHOT_ASSISTANT},
                             {"role": "user", "content": user_msg},
                         ],
                         "max_tokens": min(item.max_tokens or self._max_tokens, self._max_tokens),
