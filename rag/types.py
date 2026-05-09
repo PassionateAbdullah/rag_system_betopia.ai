@@ -387,6 +387,43 @@ class Usage:
 
 
 @dataclass
+class AgentResponse:
+    """Top-level response from the agent orchestrator.
+
+    Wraps the EvidencePackage produced by retrieval with the synthesised
+    natural-language answer + the citations it relies on. Same shape across
+    every strategy (Simple / Hybrid / Deep / Agentic) so callers never
+    branch on the underlying retrieval path.
+    """
+    query: str
+    answer: str
+    citations: list[Citation]
+    evidence: EvidencePackage  # forward ref resolved at runtime
+    usage: Usage | None = None
+    debug: dict[str, Any] | None = None
+    synthesizer: str = "passthrough"
+    fell_back: bool = False
+    error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "query": self.query,
+            "answer": self.answer,
+            "citations": [c.to_dict() for c in self.citations],
+            "evidence": self.evidence.to_dict(),
+            "synthesizer": self.synthesizer,
+            "fellBack": self.fell_back,
+        }
+        if self.usage is not None:
+            out["usage"] = self.usage.to_dict()
+        if self.debug is not None:
+            out["debug"] = self.debug
+        if self.error is not None:
+            out["error"] = self.error
+        return out
+
+
+@dataclass
 class EvidencePackage:
     """Final response — same external shape between MVP and production.
 
