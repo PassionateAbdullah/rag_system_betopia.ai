@@ -1,4 +1,35 @@
 services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: betopia-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # One-shot init that pulls the small Qwen model once Ollama is healthy.
+  # Idempotent — `ollama pull` no-ops when the layer cache is up to date.
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: betopia-ollama-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "ollama pull qwen2.5:0.5b && echo 'qwen2.5:0.5b ready'"
+    restart: "no"
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -9,30 +40,7 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
-    healthcheck:
-      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  postgres:
-    image: postgres:16
-    container_name: betopia-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: rag
-      POSTGRES_PASSWORD: rag
-      POSTGRES_DB: betopia_rag
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U rag -d betopia_rag"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
 
 volumes:
+  ollama_data:
   qdrant_data:
-  postgres_data:
