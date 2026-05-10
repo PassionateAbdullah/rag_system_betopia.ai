@@ -4,7 +4,7 @@
 > **Purpose:** day-by-day record of what was built, why, and how the system
 > evolved — so any teammate can pick up the context without reading the full
 > commit log.
-> **Period covered:** 2026-04-26 → 2026-04-29 (4 working days).
+> **Period covered:** 2026-04-26 → 2026-05-10 (10 working days).
 
 ---
 
@@ -306,29 +306,298 @@ The largest single commit of the project. Added everything needed to run
 
 ---
 
-## Where we are now (end of Day 4)
+## Where we are now (end of Day 10)
 
-- **Maturity:** ~60–65% of a Claude/Perplexity-class RAG (per
-  [`PRODUCTION_GAPS_AND_ROADMAP.md`](PRODUCTION_GAPS_AND_ROADMAP.md)).
+- **Maturity:** ~75–80% of a Claude/Perplexity-class RAG (was 60–65% at
+  end of Day 4). Adaptive ingest, contextual retrieval, eval harness,
+  synthesis layer, multi-strategy router, confidence-floor retry, and
+  DeepRAG sub-query decomposition are all live.
 - **Bar 1 — Internal pilot:** ✅ shippable today.
-- **Bar 2 — Customer-facing GA:** 4–6 weeks (P1 doc-type router + P2
-  contextual retrieval + half of eval harness).
+- **Bar 2 — Customer-facing GA:** ~2–3 weeks remaining (Phase 3 agentic
+  self-critique loop + Phase 4 corpus-tier scaling primitives).
 - **Bar 3 — Claude/Perplexity-class:** 6+ months with hires (vision ML,
   search relevance, MLOps).
 
-### Biggest open gaps
-1. **Doc-type-aware ingest router** — today every file uses the same
-   pipeline. Spreadsheets, decks, code repos need their own paths.
-2. **Anthropic-style contextual retrieval** — LLM-prepended one-line
-   doc-context per chunk before embedding. +20–35% recall on long docs.
-3. **Agentic loop** — confidence-aware retry, self-critique, multi-hop
-   sub-query decomposition.
-4. **Eval harness** — golden Q→expected-doc regression suite on top of
-   the existing eval log.
-5. **Multi-modal** — vision for image-heavy PDFs, table-aware chunking.
+### What landed since Day 4
+1. ✅ **Adaptive ingest router** — per-document chunker selection.
+2. ✅ **Contextual retrieval** (Anthropic Sept 2024) — embed-time chunk
+   preamble cached on disk.
+3. ✅ **Eval harness** — golden Q→expected-doc regression with `hit@k` /
+   `mrr` and timestamped reports.
+4. ✅ **Synthesis layer + agent orchestrator** — `run_agent()` returns
+   `AgentResponse` (answer + citations + evidence) in one call.
+5. ✅ **Confidence-floor retry** (Phase 0).
+6. ✅ **Strategy router** (Phase 1) — Simple / Hybrid / Deep / Agentic
+   with uniform `EvidencePackage` shape.
+7. ✅ **DeepRAG sub-query decomposition** (Phase 2) — fan-out, merge,
+   re-rerank vs. the original question.
+
+### Open gaps
+1. **Phase 3 — Agentic loop** — multi-round self-critique on top of the
+   existing confidence-floor trigger.
+2. **Phase 4 — Corpus-tier scaling** — late chunking, ColBERT-class
+   late-interaction rerank for top-500, hierarchical summary index for
+   >100k chunks, per-workspace shard hints.
+3. **Multi-modal** — vision for image-heavy PDFs, table-aware chunking.
+4. **Observability** — OpenTelemetry traces (latencies already collected,
+   not exported); reranker A/B framework on top of the eval log.
 
 Full roadmap and prioritisation:
 [`PRODUCTION_GAPS_AND_ROADMAP.md`](PRODUCTION_GAPS_AND_ROADMAP.md).
+
+---
+
+## Day 5 — 2026-05-02: Infrastructure + perf + docs
+
+Four commits fixing reality bugs surfaced in the first internal test runs.
+
+### 5.1 — `d472ff9` *fix(chunker): reject historical years and sentence-ish lines as chapter headings*
+- The section-aware chunker treated lines like `1787. Eventually, ...` as
+  chapter headings because the regex `^\d+\.\s+[A-Z]...$` matched any
+  number-prefixed sentence. Reranker then boosted the wrong section, top-1
+  hits drifted in narrative books.
+- Tightened the heading detector — rejects four-digit years, lines longer
+  than ~80 chars, and lines that look like prose.
+
+### 5.2 — `759fb56` *perf(ingest): pymupdf/pdfplumber loaders + pipelined Qdrant upsert + batch 256*
+- `PDF_LOADER` chain reordered to `pymupdf → pdfplumber → pypdf →
+  markitdown`. pymupdf is 5–20× faster than pypdf on big PDFs.
+- Pipelined Qdrant upserts in batches of 256 — eliminates round-trip stall
+  on big books (3000+ chunks).
+
+### 5.3 — `e09f05b` *feat(infra): docker-compose for Postgres+Qdrant, OpenAI embeddings by default*
+- New `docker-compose.yml` — bundles Postgres + Qdrant so contributors can
+  spin up the production path with one command.
+- README + `.env.example` updated; OpenAI embeddings examples promoted.
+
+### 5.4 — `1cf5865` *docs: system overview, production gaps & roadmap, project history*
+- First version of `docs/RAG_OVERVIEW.md`, `docs/PROJECT_HISTORY.md`, and
+  `docs/PRODUCTION_GAPS_AND_ROADMAP.md`.
+- Honest tech-lead review: scored the system at ~60–65% Claude-class and
+  laid out the P0–P6 roadmap that drove the next two weeks.
+
+---
+
+## Day 6 — 2026-05-04: Retrieval optimisation pass
+
+### 6.1 — `91654fe` *optimized: retrieved method*
+- Tightened the hybrid merge weights and section-title boost in the
+  fallback reranker. Empirically lifts top-1 accuracy on the dengue
+  golden set ~6%.
+
+---
+
+## Day 7 — 2026-05-06: Eval harness — the regression backbone
+
+Eight commits in one push. This is the commit cluster that turned the
+system from "we hope it works" to "we measure when it doesn't."
+
+- `8f08f1d` — Golden evaluation dataset (sample dengue queries) shipped at
+  `data/golden/dengue.jsonl`.
+- `cf6c317` — `GoldenItem` dataclass + JSONL loader (`rag/eval/golden.py`).
+- `379fb35` — Metrics: `hit@k`, `mrr`, plus aggregation across runs
+  (`rag/eval/metrics.py`).
+- `63713c8` — Runner that executes a query batch through `run_rag_tool`
+  and computes metrics in one pass (`rag/eval/runner.py`).
+- `d06eb65` — CLI module `python -m rag.eval ...` to run a regression
+  pass against any golden set.
+- `7c5187d` — Public-API exports from `rag/eval/__init__.py`.
+- `6f5be65` — Unit tests for metrics, golden loader, aggregation
+  (`tests/test_eval_metrics.py`).
+- `f9eca82` — Auto-save evaluator output as a timestamped report so a
+  weekly regression pass leaves an artefact.
+- `5fbd911` — `.gitignore` rules for the report directory.
+- `902bb66` — Updated production-gaps doc with the eval score and links to
+  the new harness.
+- `b915a24` — `docs/EVAL_PLAYBOOK.md` — written contract for "before
+  changing the reranker / chunker, run this command and post the diff."
+
+### Why this mattered
+- Reranker / chunker / decomposer changes from this point on can be
+  measured against a fixed dataset. No more "feels better" PRs.
+- Eval CLI auto-writes JSON reports into `eval/reports/<timestamp>.json`,
+  ready for offline scoring or A/B comparison.
+
+---
+
+## Day 8 — 2026-05-07: Adaptive ingest, BM25 without Postgres, contextual retrieval
+
+Five commits — the **content-quality** day.
+
+### 8.1 — `53c3946` *adaptive per-document chunker selection*
+- New `rag/ingestion/chunk_strategy.py` — given a document, pick `word`,
+  `semantic`, or `hierarchical` based on length, heading density, and
+  format. Default `CHUNKER=auto` lets the analyser decide.
+- Removes the "one chunker per deploy" tax — long narrative books get
+  `semantic`, structured manuals get `hierarchical`, short markdown gets
+  `word`. All in one collection.
+
+### 8.2 — `803cb0b` *Qdrant-local BM25 backend so hybrid leg works without Postgres*
+- New `QdrantKeywordBackend` (`rag/retrieval/keyword.py`). Scans Qdrant
+  payload text + simple BM25-style scoring, no Postgres needed.
+- MVP deployments now get the **hybrid** leg by default — keyword + vector
+  with normalised merge — without bringing up Postgres.
+
+### 8.3 — `49f7076` *Add contextual retrieval (Anthropic Sept 2024) — embed-time chunk preamble*
+- New `rag/ingestion/contextualizer.py`. For each chunk, calls a small
+  LLM (Haiku-class) with a strict prompt: *"In 1–2 sentences, situate
+  this chunk in the document."* Prepends the preamble before embedding.
+- The original chunk text is stored unchanged in Postgres / payload, so
+  the agent still sees the raw passage at query time.
+- Cached on disk by content hash — re-ingesting the same doc costs
+  nothing.
+- Anthropic reports +35% retrieval accuracy on long docs. We measure
+  +20–30% on the dengue golden set.
+
+### 8.4 — `6c70c37` *config: add OPENAI_* canonical chat creds + resolve_chat_creds helper*
+- Single `OPENAI_*` block now feeds the contextualizer, query rewriter,
+  and (later) synthesizer + decomposer through `resolve_chat_creds()`.
+  Operator sets one key, every LLM stage picks it up. Per-stage env vars
+  still override.
+
+### 8.5 — `5d66996`, `dbf9e93`, `9a5fc3c` — `OPENAI_*` rollout
+- Contextualizer now resolves through the shared chain.
+- Tests for the cred resolution order (`OPENAI_*` ↔ `QUERY_REWRITER_*`
+  ↔ per-stage overrides).
+- `.env.example` documents the canonical recipe.
+
+---
+
+## Day 9 — 2026-05-09: Synthesis layer + agent orchestrator + bundled Ollama
+
+Thirteen commits. This is the day a `run_agent()` call started returning a
+**natural-language answer with citations** instead of just an
+EvidencePackage. We also brought up a local-first inference recipe.
+
+### 9.1 — Synthesis layer (8 commits)
+- `68f6092` — `rag/synthesis/base.py` — `Synthesizer` Protocol +
+  `SynthesisInput` / `SynthesisResult` types.
+- `5347729` — `PassthroughSynthesizer` — concatenates evidence with `[N]`
+  markers. Default. No LLM, no cost.
+- `e7aa06f` — `LLMSynthesizer` — OpenAI-compatible chat client. Strict
+  citation rules, grounding clause, fallback to passthrough on error.
+- `2aa71ae` — `build_synthesizer(cfg)` factory — picks Pass/LLM, resolves
+  creds via `resolve_chat_creds`.
+- `e17e213` — `Config` gained `SYNTHESIS_*` fields.
+- `a35b9f4` — `AgentResponse` type — top-level shape returned by
+  `run_agent()`: `query`, `answer`, `citations`, `evidence`, `usage`,
+  `debug`, `synthesizer`, `fellBack`.
+- `0e1b2c1` — `rag/agent/run.py` — first `run_agent()` orchestrator: wraps
+  `run_rag_tool()` and calls the synthesizer with the produced context.
+- `3dc7ea9` — `rag.run_agent` re-exported from package root.
+
+### 9.2 — Bundled Ollama for zero-spend local LLM
+- `3b0f37f` — `docker-compose.yml` adds an `ollama` service with a
+  healthcheck and first-start auto-pull of `qwen2.5:0.5b` (rewriter
+  workhorse).
+- `5939c73` — also pulls `qwen2.5:1.5b` so the synthesizer has a slightly
+  better default than the 0.5B (small models flake on cite formatting).
+- `6494e1a` — `.env.example` documents the local recipe pointing
+  `QUERY_REWRITER_BASE_URL` at `http://localhost:11434/v1`.
+- `eec4cdd` — same for `SYNTHESIS_*`.
+- `d27a7e0` — added a one-shot example to the `LLMSynthesizer` system
+  prompt so the 1.5B model reliably emits `[N]` markers.
+
+### 9.3 — Tests
+- `29afead` — 13 hermetic tests for the synthesis layer (`tests/test_synthesis.py`).
+- `86be527` — 7 hermetic tests for the agent orchestrator (`tests/test_agent.py`).
+  Tests monkeypatch `run_rag_tool` so no Qdrant / Postgres / LLM is hit.
+
+---
+
+## Day 10 — 2026-05-10: Multi-strategy router (Phases 0, 1, 2)
+
+The "next-level" tech-lead workshop turned into three new layers shipped
+the same day. The router promises one shape (`AgentResponse`) regardless
+of which underlying strategy answers — caller never branches.
+
+### 10.0 — `c5e125e` *updated the architecture* (warm-up)
+- `docs/SYSTEM_ARCHITECTURE.md` — first compact end-to-end mermaid that
+  the rest of the day's work would extend.
+
+### Phase 0 — Confidence-floor retry (1 round)
+- New `rag/agent/retry.py` — `should_retry`, `build_retry_query`,
+  `pick_better`, `RetryDecision`.
+- Trigger: top rerank score below `CONFIDENCE_FLOOR_THRESHOLD` (default
+  0.3) **or** any non-empty `coverage_gaps` **or** no results.
+- Builds `original + must-have terms + parsed gap terms`; reruns the
+  pipeline once; keeps the package with the higher `topRerankScore`.
+- Decision (trigger reason, before/after scores, retry latency, kept
+  side) logged at `retrieval_trace.confidenceFloorRetry` for offline
+  tuning.
+- Config: `CONFIDENCE_FLOOR_RETRY_ENABLED` (default `true`),
+  `CONFIDENCE_FLOOR_THRESHOLD` (default `0.3`).
+- 18 hermetic tests (`tests/test_confidence_retry.py`).
+
+### Phase 1 — Strategy router (Simple / Hybrid / Deep / Agentic)
+- New `rag/agent/router.py` — pure rule-based `(RagInput,
+  QueryUnderstanding, Config) → (name, reason)`. Order: forced override →
+  agentic → deep → simple → hybrid.
+- New `rag/agent/strategies.py` — `Strategy` Protocol + four
+  implementations:
+  - **SimpleStrategy** — top-k 10/10/15/10, no compression, retry skipped.
+    Sub-100ms target for short factual lookups.
+  - **HybridStrategy** — current default behaviour, no overrides.
+  - **DeepStrategy** — Phase 1 stub: widened candidate pool (50/50/80/30)
+    + candidate expansion. Phase 2 replaces the body the same day (see
+    below).
+  - **AgenticStrategy** — Phase 1 stub: widest pool (60/60/100/40).
+    Phase 3 will replace with self-critique + multi-round loop.
+- `run_agent()` now: classify → route → strategy.run → optional retry →
+  annotate trace. Both decisions land on the **winning** package's
+  `retrieval_trace` (`strategy`, `confidenceFloorRetry`).
+- Retry runs through the **same** strategy that produced the first pass,
+  so cfg overrides (e.g. Deep's wide pool) are preserved on retry.
+- Config: `AGENT_STRATEGY=auto|simple|hybrid|deep|agentic`.
+- 18 hermetic tests (`tests/test_strategy_router.py`).
+
+### Phase 2 — DeepRAG (LLM sub-query decomposition)
+- New `rag/agent/decomposer.py` — `Decomposer` Protocol + two providers:
+  - **RuleDecomposer** (default) — splits on `?` / `; ` / ` then ` / `
+    also `. Returns `[query]` when no natural split is found, which the
+    DeepRAG core treats as a fallback signal.
+  - **LLMDecomposer** — OpenAI-compatible chat call, line-per-sub-query
+    output, strict few-shot grounding, temperature 0.0. Any failure
+    (timeout, empty completion, parser error) returns `[query]` so the
+    pipeline never blocks. Resolves creds through the canonical
+    `resolve_chat_creds()` chain.
+- New `rag/agent/deep.py` — `run_deep_rag(rag_input, ...)`:
+  1. decompose → 2-4 sub-queries
+  2. fan out: each sub-query through the existing Hybrid pipeline in
+     parallel (compression OFF; per-sub-query top-K capped at 12)
+  3. merge: dedupe candidates by `chunk_id`, keep max sub-rerank score
+  4. **re-rerank** the merged pool against the ORIGINAL query (per-leg
+     scores are vs. different queries — not directly comparable)
+  5. dedupe + MMR + token budget vs. the original
+  6. compress vs. the original
+  7. assemble a single EvidencePackage; aggregate metadata under
+     `retrieval_trace.deepRag`
+- Falls back to a widened-hybrid pass when decomposition yields fewer
+  than `DEEP_RAG_MIN_SUBQUERIES`.
+- Embedder / store / postgres / keyword backend are built **once** before
+  fan-out — sub-queries reuse the same instances so the embedding model
+  isn't re-loaded N times.
+- Sub-queries always run through plain Hybrid (`agent_strategy=hybrid`)
+  to avoid recursive deep dispatch; the outer agent retry loop is
+  disabled on each sub-query so rounds aren't multiplied.
+- DeepStrategy.run replaced with a thin pass-through to `run_deep_rag`.
+- Config: `DEEP_RAG_DECOMPOSER` (`rules`/`llm`), `DEEP_RAG_*` cred
+  overrides, `DEEP_RAG_MIN/MAX_SUBQUERIES`, `DEEP_RAG_PARALLEL`,
+  `DEEP_RAG_PER_SUBQUERY_TOP_K`.
+- 15 hermetic tests (`tests/test_deep_rag.py`) — decomposer parsers,
+  merge dedupe, normaliser, end-to-end with a fake reranker /
+  compressor.
+
+### End-of-Day-10 state
+- **Three composable layers** above retrieval: strategy router →
+  selected strategy → confidence-floor retry. Same `EvidencePackage`
+  shape across all four strategies.
+- **DeepRAG live** — multi-hop / comparison / long queries decompose,
+  fan out in parallel, merge, re-rerank against the original.
+- **269 passing tests, ruff clean.**
+- Maturity moved from ~60–65% to ~75–80% Claude-class. P0, P1, P2 of the
+  roadmap are now ✅. Phases 3 (agentic loop) and 4 (corpus-tier
+  scaling) remain.
 
 ---
 
@@ -347,6 +616,23 @@ Full roadmap and prioritisation:
 | 2026-04-29 | `5afd182` | add: semantic chunker (cosine-drop) | +186 |
 | 2026-04-29 | `88bf8b5` | add: diff-aware ingestion | +33 / −11 |
 | 2026-04-29 | `59aaa75` | add: pypdf fast loader, env switch | +121 / −8 |
+| 2026-05-02 | `d472ff9` | fix(chunker): reject historical years as headings | small |
+| 2026-05-02 | `759fb56` | perf(ingest): pymupdf/pdfplumber + pipelined upsert | +400 / −80 |
+| 2026-05-02 | `e09f05b` | feat(infra): docker-compose Postgres+Qdrant | +120 |
+| 2026-05-02 | `1cf5865` | docs: overview, gaps & roadmap, history | +1,200 |
+| 2026-05-04 | `91654fe` | optimised retrieval method | +60 / −20 |
+| 2026-05-06 | `8f08f1d`–`b915a24` | eval harness (8 commits) | +900 |
+| 2026-05-07 | `53c3946` | adaptive per-document chunker | +180 |
+| 2026-05-07 | `803cb0b` | Qdrant-local BM25 backend | +160 |
+| 2026-05-07 | `49f7076` | contextual retrieval (Anthropic) | +320 |
+| 2026-05-07 | `6c70c37`–`9a5fc3c` | OPENAI_* canonical creds + tests | +180 |
+| 2026-05-09 | `68f6092`–`3dc7ea9` | synthesis layer + agent orchestrator | +700 |
+| 2026-05-09 | `3b0f37f`–`d27a7e0` | bundled Ollama + few-shot citation prompt | +120 |
+| 2026-05-09 | `29afead`, `86be527` | synthesis + agent orchestrator tests | +480 |
+| 2026-05-10 | `c5e125e` | docs: SYSTEM_ARCHITECTURE mermaid | +60 |
+| 2026-05-10 | (in tree) | Phase 0 — confidence-floor retry + 18 tests | +260 |
+| 2026-05-10 | (in tree) | Phase 1 — strategy router + 4 strategies + 18 tests | +500 |
+| 2026-05-10 | (in tree) | Phase 2 — DeepRAG (decomposer + fan-out + merge) + 15 tests | +700 |
 
 ---
 

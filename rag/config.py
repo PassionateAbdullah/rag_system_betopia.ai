@@ -126,6 +126,37 @@ class Config:
     synthesis_timeout: float = 30.0
     synthesis_max_tokens: int = 800
 
+    # Confidence-floor retry — when the first retrieval pass has a weak top
+    # rerank score or leaves uncovered query terms, the agent rebuilds the
+    # query (original + must-have terms + coverage-gap terms) and runs
+    # `run_rag_tool` once more. The package with the higher topRerankScore
+    # wins. One round only — kept cheap by design.
+    confidence_floor_retry_enabled: bool = True
+    confidence_floor_threshold: float = 0.3
+
+    # Strategy router (Phase 1) — picks Simple / Hybrid / Deep / Agentic
+    # for each query based on `query_understanding`. "auto" lets the router
+    # decide; setting any concrete strategy forces it for every call.
+    # DeepStrategy and AgenticStrategy are stubs in Phase 1 — they widen the
+    # candidate pool but do not yet decompose / self-critique. Phases 2 and
+    # 3 will replace those internals without changing the EvidencePackage
+    # shape, so callers never branch.
+    agent_strategy: str = "auto"
+
+    # DeepRAG (Phase 2) — multi-hop / comparison / long queries are split
+    # into 2–4 sub-queries that retrieve in parallel, then merge + re-rerank
+    # against the original question. Decomposer creds resolve through
+    # `resolve_chat_creds` so a single OPENAI_* block lights up everything.
+    deep_rag_decomposer: str = "rules"
+    deep_rag_model: str = ""
+    deep_rag_api_key: str = ""
+    deep_rag_base_url: str = ""
+    deep_rag_timeout: float = 8.0
+    deep_rag_min_subqueries: int = 2
+    deep_rag_max_subqueries: int = 4
+    deep_rag_parallel: bool = True
+    deep_rag_per_subquery_top_k: int = 12
+
     # Feature flags
     enable_query_rewrite: bool = True
     enable_query_understanding: bool = True
@@ -248,6 +279,18 @@ def load_config() -> Config:
         synthesis_base_url=_env_str("SYNTHESIS_BASE_URL"),
         synthesis_timeout=_env_float("SYNTHESIS_TIMEOUT", 30.0),
         synthesis_max_tokens=_env_int("SYNTHESIS_MAX_TOKENS", 800),
+        confidence_floor_retry_enabled=_env_bool("CONFIDENCE_FLOOR_RETRY_ENABLED", True),
+        confidence_floor_threshold=_env_float("CONFIDENCE_FLOOR_THRESHOLD", 0.3),
+        agent_strategy=_env_str("AGENT_STRATEGY", "auto").lower(),
+        deep_rag_decomposer=_env_str("DEEP_RAG_DECOMPOSER", "rules").lower(),
+        deep_rag_model=_env_str("DEEP_RAG_MODEL"),
+        deep_rag_api_key=_env_str("DEEP_RAG_API_KEY"),
+        deep_rag_base_url=_env_str("DEEP_RAG_BASE_URL"),
+        deep_rag_timeout=_env_float("DEEP_RAG_TIMEOUT", 8.0),
+        deep_rag_min_subqueries=_env_int("DEEP_RAG_MIN_SUBQUERIES", 2),
+        deep_rag_max_subqueries=_env_int("DEEP_RAG_MAX_SUBQUERIES", 4),
+        deep_rag_parallel=_env_bool("DEEP_RAG_PARALLEL", True),
+        deep_rag_per_subquery_top_k=_env_int("DEEP_RAG_PER_SUBQUERY_TOP_K", 12),
         enable_query_rewrite=_env_bool("ENABLE_QUERY_REWRITE", True),
         enable_query_understanding=_env_bool("ENABLE_QUERY_UNDERSTANDING", True),
         enable_hybrid_retrieval=_env_bool("ENABLE_HYBRID_RETRIEVAL", True),

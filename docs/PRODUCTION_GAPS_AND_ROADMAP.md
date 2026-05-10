@@ -9,7 +9,9 @@
 
 ## TL;DR
 
-We're at **~60–65% of a Claude/Perplexity-grade RAG**.
+We're at **~75–80% of a Claude/Perplexity-grade RAG** (was 60–65% on
+2026-05-02). Days 5–10 closed P0, P1, and P2 of the roadmap and added
+the eval harness + adaptive ingest.
 
 | Capability | Us today | Claude / Perplexity / GPT |
 |---|---|---|
@@ -22,12 +24,13 @@ We're at **~60–65% of a Claude/Perplexity-grade RAG**.
 | Hierarchical (parent/child) | ✅ opt-in | ✅ |
 | Citations + audit trail | ✅ | ✅ |
 | Pluggable everything | ✅ | ✅ |
-| **Contextual retrieval** (LLM-prepended chunk context) | ❌ | ✅ Anthropic |
+| **Contextual retrieval** (LLM-prepended chunk context) | ✅ (Day 8) | ✅ Anthropic |
 | **HyDE / hypothetical doc embeddings** | ❌ | ✅ |
-| **Query decomposition** (multi-hop sub-queries) | ❌ | ✅ Perplexity |
-| **Agentic retry loop** (low confidence → retrieve again) | ❌ | ✅ |
+| **Query decomposition** (multi-hop sub-queries) | ✅ (Day 10 — DeepRAG) | ✅ Perplexity |
+| **Agentic retry loop** (low confidence → retrieve again) | ✅ partial (Day 10 — confidence-floor retry, 1 round) | ✅ |
 | **Self-RAG** (model decides if retrieval needed) | ❌ | ✅ |
-| **Doc-type router** (PDF vs SQL vs code vs image) | ❌ | ✅ |
+| **Doc-type router** (PDF vs SQL vs code vs image) | ✅ partial (Day 8 — adaptive chunker, ingest only) | ✅ |
+| **Strategy router** (Simple / Hybrid / Deep / Agentic per query) | ✅ (Day 10) | ✅ Anthropic / Perplexity |
 | **Late chunking** (long-context embed, slice after) | ❌ | ✅ partially |
 | **Vision / multi-modal RAG** | ❌ | ✅ |
 | **ColBERT-style late interaction** | ❌ | ✅ at scale |
@@ -157,46 +160,64 @@ Single `EvidencePackage` shape regardless of strategy. Caller never branches.
 
 | Area | Score | Notes |
 |---|---|---|
-| Core retrieval | **8/10** | Hybrid + rerank + dedupe + MMR all in. Solid. |
-| Ingestion | **6/10** | Section-aware + semantic + hierarchical, but doc-type-blind. |
-| Query understanding | **6/10** | Rules-based; works for English, no decomposition. |
+| Core retrieval | **9/10** | Hybrid + rerank + dedupe + MMR + (Day 10) DeepRAG fan-out + confidence-floor retry. |
+| Ingestion | **8/10** | Adaptive chunker + contextual retrieval cached. Multi-modal still missing. |
+| Query understanding | **8/10** | Rules-based classifier feeding a Phase-1 strategy router. LLM polish optional. |
 | Compression | **8/10** | Extractive default + LLM with verbatim guard. |
 | Reranking | **7/10** | Free fallback strong; cross-encoder + Jina/Qwen plug-in. |
 | Citations + audit | **9/10** | Better than most teams' RAG. |
 | Multi-tenant | **7/10** | `workspace_id` enforced; needs row-level Postgres policy. |
-| Observability | **5/10** | Eval log exists. No traces, no dashboards. |
-| Agentic | **2/10** | No loop, no self-critique, no retry. **Biggest gap.** |
+| Observability | **5/10** | Eval log + timestamped reports. Still no traces, no dashboards. |
+| Agentic | **5/10** | Confidence-floor retry + DeepRAG decomposition live. Multi-round self-critique loop still open (Phase 3). |
 | Multi-modal | **0/10** | Text only. |
-| Doc-type adaptive | **2/10** | Same pipeline regardless of input. |
-| Production hardening | **6/10** | Dual-write rollback, lazy imports, auth, CORS, health probe. |
-| Eval / regression | **5/10** | Eval log + offline harness ([rag/eval](../rag/eval/)). Playbook: [EVAL_PLAYBOOK.md](EVAL_PLAYBOOK.md). |
+| Doc-type adaptive | **6/10** | Adaptive chunker chooses per document. Vision / spreadsheet / code paths still missing. |
+| Production hardening | **7/10** | Dual-write rollback, lazy imports, auth, CORS, health probe. |
+| Eval / regression | **8/10** | Golden harness + metrics + auto-saved reports. Playbook: [EVAL_PLAYBOOK.md](EVAL_PLAYBOOK.md). |
 
-**Overall: enterprise-credible MVP. Solid foundation. Not yet at Claude/Perplexity level.**
+**Overall: customer-pilot-ready hybrid + agentic-router RAG.** Phase 3
+(self-critique multi-round) + Phase 4 (corpus-tier scaling) close the
+remaining ~20–25 percentage points to Claude / Perplexity parity for
+text-only workloads.
 
 ---
 
 ## 5. Roadmap — what to build, in priority order
 
-### P0 — Recover from this week's miss (1–2 days)
-- [x] Section heading regex bug — **fixed this commit.**
-- [ ] Force `POSTGRES_URL` in deploy template — keyword leg should always be on.
-- [ ] Default `CHUNKER=semantic` for PDFs over N pages.
-- [ ] Add a confidence floor — if top rerank < 0.3, retry with rewritten query.
+### P0 — Recover from the early miss (✅ done — 2026-05-02 / 2026-05-10)
+- [x] Section heading regex bug — fixed `d472ff9`.
+- [x] Hybrid leg always on (Postgres + Qdrant-local BM25 backend `803cb0b`).
+- [x] Default `CHUNKER=auto` adaptive selection (`53c3946`).
+- [x] **Confidence-floor retry** — if top rerank < `CONFIDENCE_FLOOR_THRESHOLD`
+      (default 0.3) or coverage gaps non-empty, rebuild query and retry once
+      through the same strategy. `rag/agent/retry.py`.
 
-### P1 — Adaptive routing (1–2 weeks)
-- [ ] **Ingest-time doc analyser.** Inspect file → pick chunker, loader, metadata extractor. Built as `rag/ingestion/doc_router.py`.
-- [ ] **Query-time strategy router.** Glue on top of existing `query_understanding`. Map `(query_type, complexity)` to one of `Simple|Hybrid|Deep|Agentic`. Single entrypoint.
-- [ ] **DeepRAG** — query decomposition (LLM-driven; falls back to original query on error). Sub-queries retrieved in parallel; results unioned then deduped through existing pipeline.
+### P1 — Adaptive routing (✅ done — 2026-05-07 / 2026-05-10)
+- [x] **Ingest-time doc analyser.** `rag/ingestion/chunk_strategy.py` (`53c3946`).
+- [x] **Query-time strategy router.** `rag/agent/router.py` +
+      `rag/agent/strategies.py`. Maps `(query_type, multi-hop, length)` to
+      `simple | hybrid | deep | agentic`. Single entry point in
+      `run_agent`.
+- [x] **DeepRAG** — `rag/agent/deep.py` + `rag/agent/decomposer.py`.
+      LLM (or rule) decomposer → 2-4 sub-queries → parallel fan-out via
+      existing Hybrid pipeline → merge + re-rerank against the original
+      → MMR + compress. Falls back to widened-hybrid when decomposition
+      yields a single query.
 
-### P2 — Anthropic contextual retrieval (3–5 days)
-- [ ] At ingest, run a cheap LLM (Haiku-class) over each chunk with prompt: *"In 1–2 sentences, situate this chunk in the document."* Prepend the result to the chunk text before embedding.
-- [ ] Store the original chunk text separately in Postgres (we already do).
-- [ ] Expected: +20–35% retrieval accuracy on long docs. **The single highest-ROI feature we haven't built.**
+### P2 — Anthropic contextual retrieval (✅ done — 2026-05-07)
+- [x] `rag/ingestion/contextualizer.py` (`49f7076`). One-call-per-chunk
+      LLM preamble cached on disk; embed-time only (agent still sees raw
+      text).
 
-### P3 — Agentic loop (1–2 weeks)
-- [ ] `rag/pipeline/agentic.py` — wraps `run_rag_tool`. If confidence < threshold, ask the agent: *"What did we miss?"* → rewrite query → retrieve again. Up to N rounds (default 2).
-- [ ] Self-critique: after first retrieval, run a tiny LLM check: *"does this evidence answer the query?"* — if no, escalate.
-- [ ] Streaming: yield top-K as soon as ranked.
+### P3 — Agentic loop (partial — confidence retry done, multi-round still open)
+- [x] **Confidence-floor retry (1 round)** — Phase 0, see P0 above.
+- [ ] **Self-critique** — after first retrieval, run a tiny LLM check:
+      *"does this evidence answer the query?"* — if no, escalate to an
+      additional retrieval round. Reuse `resolve_chat_creds()` chain.
+- [ ] **Multi-round** — extend the confidence-floor retry to N rounds,
+      with the LLM judge gating the next round. Default cap: 2 extra
+      rounds.
+- [ ] Streaming: yield top-K as soon as ranked (not blocking on
+      compression / synthesis).
 
 ### P4 — Multi-modal (3–4 weeks)
 - [ ] Vision embedding for image-heavy PDFs (page-as-image when text extraction is sparse).

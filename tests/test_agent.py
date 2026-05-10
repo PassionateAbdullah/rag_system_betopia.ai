@@ -5,8 +5,9 @@ so we exercise only the synthesis + plumbing layer.
 """
 from __future__ import annotations
 
-from rag.agent import run_agent
 from rag.agent import run as agent_mod
+from rag.agent import run_agent
+from rag.agent import strategies as strategies_mod
 from rag.config import Config
 from rag.types import (
     AgentResponse,
@@ -44,7 +45,7 @@ def _fake_pkg(*, n: int = 2, must_have: list[str] | None = None) -> EvidencePack
 
 
 def test_agent_passthrough_returns_concat_answer_and_citations(monkeypatch):
-    monkeypatch.setattr(agent_mod, "run_rag_tool", lambda *a, **kw: _fake_pkg(n=2))
+    monkeypatch.setattr(strategies_mod, "run_rag_tool", lambda *a, **kw: _fake_pkg(n=2))
 
     resp = run_agent(RagInput(query="what is x?"), config=Config())
     assert isinstance(resp, AgentResponse)
@@ -58,7 +59,7 @@ def test_agent_passthrough_returns_concat_answer_and_citations(monkeypatch):
 
 
 def test_agent_returns_no_evidence_message_when_context_empty(monkeypatch):
-    monkeypatch.setattr(agent_mod, "run_rag_tool", lambda *a, **kw: _fake_pkg(n=0))
+    monkeypatch.setattr(strategies_mod, "run_rag_tool", lambda *a, **kw: _fake_pkg(n=0))
 
     resp = run_agent(RagInput(query="any?"), config=Config())
     assert "No evidence" in resp.answer
@@ -67,7 +68,7 @@ def test_agent_returns_no_evidence_message_when_context_empty(monkeypatch):
 
 
 def test_agent_to_dict_round_trip(monkeypatch):
-    monkeypatch.setattr(agent_mod, "run_rag_tool", lambda *a, **kw: _fake_pkg(n=1))
+    monkeypatch.setattr(strategies_mod, "run_rag_tool", lambda *a, **kw: _fake_pkg(n=1))
 
     resp = run_agent(RagInput(query="?"), config=Config())
     d = resp.to_dict()
@@ -80,7 +81,7 @@ def test_agent_to_dict_round_trip(monkeypatch):
 
 def test_agent_passes_must_have_terms_into_synthesizer(monkeypatch):
     monkeypatch.setattr(
-        agent_mod, "run_rag_tool",
+        strategies_mod, "run_rag_tool",
         lambda *a, **kw: _fake_pkg(n=1, must_have=["alpha", "beta"]),
     )
 
@@ -101,7 +102,7 @@ def test_agent_passes_must_have_terms_into_synthesizer(monkeypatch):
 
 
 def test_agent_debug_payload_when_input_debug_true(monkeypatch):
-    monkeypatch.setattr(agent_mod, "run_rag_tool", lambda *a, **kw: _fake_pkg(n=1))
+    monkeypatch.setattr(strategies_mod, "run_rag_tool", lambda *a, **kw: _fake_pkg(n=1))
 
     resp = run_agent(RagInput(query="?", debug=True), config=Config())
     assert resp.debug is not None
@@ -110,7 +111,7 @@ def test_agent_debug_payload_when_input_debug_true(monkeypatch):
 
 
 def test_agent_accepts_dict_input(monkeypatch):
-    monkeypatch.setattr(agent_mod, "run_rag_tool", lambda *a, **kw: _fake_pkg(n=1))
+    monkeypatch.setattr(strategies_mod, "run_rag_tool", lambda *a, **kw: _fake_pkg(n=1))
 
     resp = run_agent(
         {"query": "from dict", "workspaceId": "ws", "userId": "u"},
@@ -124,7 +125,7 @@ def test_agent_falls_back_to_pkg_citations_when_synth_returns_none(monkeypatch):
     pkg.citations = [
         Citation(source_id="x", chunk_id="cx", title="t", url="u")
     ]
-    monkeypatch.setattr(agent_mod, "run_rag_tool", lambda *a, **kw: pkg)
+    monkeypatch.setattr(strategies_mod, "run_rag_tool", lambda *a, **kw: pkg)
 
     class _NullCitations:
         name = "passthrough"
